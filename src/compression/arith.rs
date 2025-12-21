@@ -29,9 +29,9 @@ pub struct ArithmeticCompressor {
 }
 
 impl ArithmeticCompressor {
-    pub fn new() -> Self {
-        ArithmeticCompressor {}
-    }
+    // pub fn new() -> Self {
+    //     ArithmeticCompressor {}
+    // }
 }
 
 impl Compressor for ArithmeticCompressor {
