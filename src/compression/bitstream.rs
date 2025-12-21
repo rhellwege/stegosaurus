@@ -78,7 +78,7 @@ impl BitStream {
                     let remaining = n - self.rbuf_index; // how many more bits we need
                     *out_buf |= self.rbuf_byte >> (8 - n); // flush the read buffer first
                     *out_buf |= next >> (8 - remaining);
-                    self.rbuf_byte = next << remaining;
+                    self.rbuf_byte = next.checked_shl(remaining as u32).unwrap_or(0);
                     self.rbuf_index = 8 - remaining;
                     return Ok(n as usize);
                 } else {
@@ -137,6 +137,46 @@ impl BitStream {
             self.wbuf_byte = 0;
             self.wbuf_index = 0;
         }
+    }
+}
+
+impl Read for BitStream {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        for i in 0..buf.len() {
+            let mut byte: u8 = 0;
+            if let Ok(bits) = self.read_n_bits(8, &mut byte) {
+                if bits == 0 {
+                    return Ok(i as usize);
+                } else if bits < 8 {
+                    // stuff in the msb
+                    byte = byte.checked_shl(8 - bits as u32).unwrap_or(0);
+                    buf[i] = byte;
+                    return Ok(i + 1 as usize);
+                } else {
+                    buf[i] = byte;
+                }
+            } else {
+                return Ok(i as usize);
+            }
+        }
+        return Ok(buf.len());
+    }
+}
+
+impl Write for BitStream {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let mut written: usize = 0;
+        for byte in buf {
+            self.write_n_bits(8, *byte);
+            written += 1;
+        }
+
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.flush();
+        Ok(())
     }
 }
 

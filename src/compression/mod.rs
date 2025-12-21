@@ -6,6 +6,6 @@ mod bitstream;
 pub mod huffman;
 
 pub trait Compressor {
-    fn deflate(&self, input_stream: impl Read, output_stream: impl Write) -> Result<()>;
-    fn inflate(&self, input_stream: impl Read, output_stream: impl Write) -> Result<()>;
+    fn compress(&mut self, input_stream: impl Read, output_stream: impl Write) -> Result<()>;
+    fn decompress(&mut self, input_stream: impl Read, output_stream: impl Write) -> Result<()>;
 }
