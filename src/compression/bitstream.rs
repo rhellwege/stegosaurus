@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 use std::io::{Read, Write};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 
 pub struct BitStream {
     bytes: VecDeque<u8>,
@@ -128,6 +128,50 @@ impl BitStream {
         if nread == 0 { None } else { Some(bit == 1) }
     }
 
+    /// reads into a byte stuffed into the msb
+    pub fn read_byte(&mut self, byte: &mut u8) -> Result<usize> {
+        let nread = self.read_n_bits(8, byte)?;
+        if nread < 8 && nread > 0 {
+            *byte <<= 8 - nread;
+        }
+        Ok(nread)
+    }
+
+    /// reads n bits into the msb
+    /// zeroes out destination
+    pub fn read_n_bits_u64(&mut self, n: u8, dest: &mut u64) -> Result<usize> {
+        let mut buf_byte: u8 = 0;
+        let mut bits_read = 0;
+        assert!(n < 64, "Cannot request more than 64 bits into a u64");
+        *dest = 0;
+        let full_bytes = n / 8;
+        let leftover = n % 8;
+        for i in 0..full_bytes {
+            if let Ok(bits) = self.read_byte(&mut buf_byte) {
+                bits_read += bits;
+                *dest |= (buf_byte as u64) << (64 - ((i + 1) * 8));
+
+                if bits < 8 {
+                    return Ok(bits_read);
+                }
+            } else {
+                return Err(anyhow!("failed to read a byte from the bitstream"));
+            }
+        }
+        if leftover > 0 {
+            if let Ok(bits) = self.read_n_bits(leftover, &mut buf_byte) {
+                // stuff into msb first
+                buf_byte <<= 8 - bits;
+                *dest |= (buf_byte as u64) << (64 - bits_read);
+                bits_read += bits;
+                return Ok(bits_read);
+            } else {
+                return Err(anyhow!("Failed to read leftover bits from bitstream"));
+            }
+        }
+        Err(anyhow!("Failed to read from bitstream for unknown reason"))
+    }
+
     /// Flushes the buffer to the output stream.
     /// Only do this at the end of the stream.
     pub fn flush(&mut self) {
@@ -138,25 +182,26 @@ impl BitStream {
             self.wbuf_index = 0;
         }
     }
+
+    pub fn clear(&mut self) {
+        self.wbuf_byte = 0;
+        self.wbuf_index = 0;
+        self.rbuf_byte = 0;
+        self.rbuf_index = 0;
+        self.bytes.clear();
+    }
 }
 
 impl Read for BitStream {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         for i in 0..buf.len() {
-            let mut byte: u8 = 0;
-            if let Ok(bits) = self.read_n_bits(8, &mut byte) {
-                if bits == 0 {
-                    return Ok(i as usize);
-                } else if bits < 8 {
-                    // stuff in the msb
-                    byte = byte.checked_shl(8 - bits as u32).unwrap_or(0);
-                    buf[i] = byte;
-                    return Ok(i + 1 as usize);
-                } else {
-                    buf[i] = byte;
-                }
-            } else {
-                return Ok(i as usize);
+            let nread = self
+                .read_byte(&mut buf[i])
+                .map_err(|_| std::io::Error::other("Failed to read byte from bitstream"))?;
+            if nread < 8 && nread > 0 {
+                return Ok(i + 1);
+            } else if nread == 0 {
+                return Ok(i);
             }
         }
         return Ok(buf.len());
