@@ -118,6 +118,16 @@ impl BitStream {
         }
     }
 
+    pub fn write_bit(&mut self, bit: bool) {
+        self.write_n_bits(1, if bit { 1 } else { 0 });
+    }
+
+    pub fn read_bit(&mut self) -> Option<bool> {
+        let mut bit: u8 = 0;
+        let nread = self.read_n_bits(1, &mut bit).unwrap_or(0);
+        if nread == 0 { None } else { Some(bit == 1) }
+    }
+
     /// Flushes the buffer to the output stream.
     /// Only do this at the end of the stream.
     pub fn flush(&mut self) {
