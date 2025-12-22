@@ -5,7 +5,8 @@ use num::{BigRational, traits::SaturatingMul};
 use std::io::{Read, Write};
 
 const ONE: u64 = 0xffffffffffff;
-const CODE_BITS: usize = 48;
+const CODE_BITS: usize = ONE.count_ones() as usize;
+const MAX_FREQ: usize = u64::MAX as usize / ONE as usize;
 
 const ONE_HALF: u64 = (ONE >> 1) + 1;
 const ONE_FOURTH: u64 = ONE_HALF >> 1;
@@ -121,7 +122,6 @@ impl ArithmeticCompressor {
     }
 
     pub fn encode(&mut self, source: impl Read) {
-        println!("Encode");
         let mut high = ONE;
         let mut low = 0;
 
@@ -183,9 +183,6 @@ impl ArithmeticCompressor {
                 .map(|b| if b { 1u64 } else { 0u64 })
                 .unwrap_or(0u64);
             *value += next_bit;
-            // *high &= ONE;
-            // *low &= ONE;
-            // *value &= ONE;
         }
         return Some(symbol as u8);
     }
