@@ -37,9 +37,7 @@ fn main() {
     };
 
     let output_stream: BufWriter<Box<dyn Write>> = match cli.out {
-        Some(path) => BufWriter::new(Box::new(
-            File::open(&path).unwrap_or(File::create(path).unwrap()),
-        )),
+        Some(path) => BufWriter::new(Box::new(File::create(&path).unwrap())),
         None => BufWriter::new(Box::new(stdout())),
     };
 

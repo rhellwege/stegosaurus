@@ -1,7 +1,6 @@
 use super::Compressor;
 use super::bitstream::BitStream;
 use anyhow::{Context, Result, anyhow};
-use num::{BigRational, traits::SaturatingMul};
 use std::io::{Read, Write};
 
 const ONE: u64 = 0xffffffffffff;
@@ -37,6 +36,9 @@ impl AdaptiveModel {
 
     /// must be called every time we read a symbol
     pub fn update_freq(&mut self, symbol: u16) {
+        if self.count() as usize >= MAX_FREQ {
+            self.clear();
+        }
         for i in (symbol as usize + 1)..258 {
             self.cum_freqs[i] += 1;
         }
@@ -94,12 +96,10 @@ impl ArithmeticCompressor {
     // https://web.archive.org/web/20241113133144/https://marknelson.us/posts/2014/10/19/data-compression-with-arithmetic-coding.html
     fn write_bits_for_symbol(&mut self, symbol: u16, high: &mut u64, low: &mut u64) {
         let p = self.model.get_probability(symbol);
-        // dbg!(&p);
 
         let range = *high - *low + 1;
         *high = *low + range * p.upper / p.denom - 1;
         *low = *low + range * p.lower / p.denom;
-        // dbg!(symbol, &high, &low);
 
         loop {
             if *high < ONE_HALF {
@@ -121,7 +121,7 @@ impl ArithmeticCompressor {
         }
     }
 
-    pub fn encode(&mut self, source: impl Read) {
+    pub fn encode(&mut self, mut source: impl Read, mut dest: impl Write) {
         let mut high = ONE;
         let mut low = 0;
 
@@ -189,7 +189,7 @@ impl ArithmeticCompressor {
 
     /// outputs symbols to symbol stream from the internal bitstream
     /// must prime the bitstream first
-    pub fn decode(&mut self, mut out_stream: impl Write) {
+    pub fn decode(&mut self, mut input_stream: impl Read, mut out_stream: impl Write) {
         let mut high = ONE;
         let mut low: u64 = 0;
         let mut value: u64 = 0;
@@ -217,22 +217,32 @@ impl ArithmeticCompressor {
 }
 
 impl Compressor for ArithmeticCompressor {
-    fn compress(&mut self, input_stream: impl Read, mut output_stream: impl Write) -> Result<()> {
-        self.encode(input_stream);
+    fn compress(
+        &mut self,
+        mut input_stream: impl Read,
+        mut output_stream: impl Write,
+    ) -> Result<()> {
+        self.encode(&mut input_stream, &mut output_stream);
+        // TODO: streaming
         let mut bytes = Vec::new();
-        let _ = self.bitstream.read_to_end(&mut bytes)?;
-        output_stream.write_all(&bytes)?;
+        self.bitstream.read_to_end(&mut bytes);
+        output_stream.write_all(&bytes);
+        output_stream.flush()?;
         self.clear();
         Ok(())
     }
 
-    fn decompress(&mut self, mut input_stream: impl Read, output_stream: impl Write) -> Result<()> {
+    fn decompress(
+        &mut self,
+        mut input_stream: impl Read,
+        mut output_stream: impl Write,
+    ) -> Result<()> {
         // read the whole input stream
         let mut input_bytes = Vec::new();
         let _ = input_stream.read_to_end(&mut input_bytes)?;
         // prime the decoder bitstream
         self.bitstream.write_all(&input_bytes)?;
-        self.decode(output_stream);
+        self.decode(input_stream, output_stream);
         self.clear();
         Ok(())
     }

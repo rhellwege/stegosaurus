@@ -1,0 +1,4 @@
+- multi byte adaptive arithmetic coding
+- arithmetic coding as an entropy coding needs a symbol space api (u16 instead of u8)
+- make whole process lazyily streamable to create composable pipelines - in practice this means implementing read on the state structure of a decoder struct or an encoder struct
+- implement bwt (with move-to-front + rle) or lzss compressors
