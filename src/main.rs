@@ -5,6 +5,10 @@ use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Write, stdin, stdout};
 use std::path::PathBuf;
 
+use crate::compression::Pipeline;
+use crate::compression::arith::{AriDecoder, AriEncoder};
+use crate::compression::mtf::{MtfDecoder, MtfEncoder};
+
 #[derive(Parser, Debug)]
 struct Cli {
     /// If specified reads the file otherwise use stdin
@@ -25,23 +29,38 @@ struct Cli {
     decompress: bool,
 }
 
+fn make_compressor(src: Box<dyn Read>) -> Pipeline {
+    Pipeline::from_reader(src)
+        .pipe(Box::new(MtfEncoder::new()))
+        .pipe(Box::new(AriEncoder::new_adaptive_bytes()))
+}
+
+fn make_decompressor(src: Box<dyn Read>) -> Pipeline {
+    Pipeline::from_reader(src)
+        .pipe(Box::new(AriDecoder::new_adaptive_bytes()))
+        .pipe(Box::new(MtfDecoder::new()))
+}
+
 fn main() {
     let cli = Cli::parse();
-    // let mut compressor = arith::AriEncoder::new_adaptive();
 
-    // let input_stream: BufReader<Box<dyn Read>> = match cli._in {
-    //     Some(path) => BufReader::new(Box::new(File::open(path).unwrap())),
-    //     None => BufReader::new(Box::new(stdin())),
-    // };
+    let input_stream: BufReader<Box<dyn Read>> = match cli._in {
+        Some(path) => BufReader::new(Box::new(File::open(path).unwrap())),
+        None => BufReader::new(Box::new(stdin())),
+    };
 
-    // let output_stream: BufWriter<Box<dyn Write>> = match cli.out {
-    //     Some(path) => BufWriter::new(Box::new(File::create(&path).unwrap())),
-    //     None => BufWriter::new(Box::new(stdout())),
-    // };
+    let mut output_stream: BufWriter<Box<dyn Write>> = match cli.out {
+        Some(path) => BufWriter::new(Box::new(File::create(&path).unwrap())),
+        None => BufWriter::new(Box::new(stdout())),
+    };
 
-    // if cli.compress || (!cli.compress && !cli.decompress) {
-    //     let _ = compressor.compress(input_stream, output_stream);
-    // } else {
-    //     let _ = compressor.decompress(input_stream, output_stream);
-    // }
+    let pipeline = if cli.compress || (!cli.compress && !cli.decompress) {
+        make_compressor(Box::new(input_stream))
+    } else {
+        make_decompressor(Box::new(input_stream))
+    };
+
+    for byte in pipeline.bytes() {
+        let _ = output_stream.write_all(&[byte.unwrap()]);
+    }
 }
