@@ -12,8 +12,21 @@ pub trait Compressor {
 
 pub trait DataTransform: Read {
     fn attach_reader(&mut self, src: Box<dyn Read>);
-    fn as_reader(&mut self) -> Box<dyn Read + '_> {
-        Box::new(self)
+}
+
+pub struct IdentityTransform {
+    src: Box<dyn Read>,
+}
+
+impl DataTransform for IdentityTransform {
+    fn attach_reader(&mut self, src: Box<dyn Read>) {
+        self.src = src;
+    }
+}
+
+impl Read for IdentityTransform {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.src.read(buf)
     }
 }
 
@@ -24,6 +37,12 @@ pub struct Pipeline {
 impl Pipeline {
     pub fn new(transform: Box<dyn DataTransform>) -> Self {
         Pipeline { transform }
+    }
+
+    pub fn from_reader(reader: Box<dyn Read>) -> Self {
+        Pipeline {
+            transform: Box::new(IdentityTransform { src: reader }),
+        }
     }
 
     pub fn pipe(self, mut new_transform: Box<dyn DataTransform>) -> Self {
@@ -51,9 +70,12 @@ mod tests {
     fn bitstream_pipeline() {
         let data_src = b"Hello, World!";
         let mut bs = BitStream::new();
-        bs.attach_reader(Box::new(data_src.as_slice()));
         let mut bs2 = BitStream::new();
-        let mut p = Pipeline::new(Box::new(bs)).pipe(Box::new(bs2));
+
+        let mut p = Pipeline::from_reader(Box::new(data_src.as_slice()))
+            .pipe(Box::new(bs))
+            .pipe(Box::new(bs2));
+
         let mut output = Vec::new();
         let nread = p.read_to_end(&mut output).unwrap();
         assert_eq!(nread, data_src.len());
