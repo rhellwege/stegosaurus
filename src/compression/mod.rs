@@ -10,23 +10,23 @@ pub trait Compressor {
     fn decompress(&mut self, input_stream: impl Read, output_stream: impl Write) -> Result<()>;
 }
 
-pub trait DataTransform<'a>: Read + 'a {
-    fn attach_reader(&mut self, src: Box<dyn Read + 'a>);
-    fn as_reader(&'a mut self) -> Box<dyn Read + 'a> {
+pub trait DataTransform: Read {
+    fn attach_reader(&mut self, src: Box<dyn Read>);
+    fn as_reader(&mut self) -> Box<dyn Read + '_> {
         Box::new(self)
     }
 }
 
-pub struct Pipeline<'a> {
-    transform: Box<dyn DataTransform<'a>>,
+pub struct Pipeline {
+    transform: Box<dyn DataTransform>,
 }
 
-impl<'a> Pipeline<'a> {
-    pub fn new(transform: Box<dyn DataTransform<'a> + 'a>) -> Self {
+impl Pipeline {
+    pub fn new(transform: Box<dyn DataTransform>) -> Self {
         Pipeline { transform }
     }
 
-    pub fn pipe(self, mut new_transform: Box<dyn DataTransform<'a> + 'a>) -> Self {
+    pub fn pipe(self, mut new_transform: Box<dyn DataTransform>) -> Self {
         new_transform.attach_reader(self.transform);
 
         Self {
@@ -35,7 +35,7 @@ impl<'a> Pipeline<'a> {
     }
 }
 
-impl<'a> Read for Pipeline<'a> {
+impl Read for Pipeline {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         self.transform.read(buf)
     }

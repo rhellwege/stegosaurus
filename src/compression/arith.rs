@@ -78,13 +78,13 @@ impl AdaptiveModel {
     }
 }
 
-pub struct ArithmeticCompressor<'a> {
+pub struct ArithmeticCompressor {
     model: AdaptiveModel,
-    bitstream: BitStream<'a>,
+    bitstream: BitStream,
     pending_bits: usize,
 }
 
-impl<'a> ArithmeticCompressor<'a> {
+impl ArithmeticCompressor {
     pub fn new_adaptive() -> Self {
         ArithmeticCompressor {
             model: AdaptiveModel::new(),
@@ -216,7 +216,7 @@ impl<'a> ArithmeticCompressor<'a> {
     }
 }
 
-impl Compressor for ArithmeticCompressor<'_> {
+impl Compressor for ArithmeticCompressor {
     fn compress(
         &mut self,
         mut input_stream: impl Read,

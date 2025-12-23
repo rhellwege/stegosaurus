@@ -6,8 +6,8 @@ use anyhow::{Context, Result, anyhow};
 
 const BUFF_SIZE: usize = 512;
 
-pub struct BitStream<'a> {
-    src: Option<Box<dyn Read + 'a>>,
+pub struct BitStream {
+    src: Option<Box<dyn Read>>,
     bytes: VecDeque<u8>,
     wbuf_byte: u8,
     wbuf_index: u8,
@@ -15,7 +15,7 @@ pub struct BitStream<'a> {
     rbuf_index: u8,
 }
 
-impl<'a> BitStream<'a> {
+impl BitStream {
     pub fn new() -> Self {
         BitStream {
             src: None,
@@ -55,7 +55,6 @@ impl<'a> BitStream<'a> {
     /// the requested number of bits requested will be zeroed out
     /// returns the number of bits read
     pub fn read_n_bits(&mut self, n: u8, out_buf: &mut u8) -> Result<usize> {
-        println!("yo!!");
         assert!(n <= 8, "Cannot read more than 8 bits");
         if (self.wbuf_index as usize + self.rbuf_index as usize + self.bytes.len() * 8) < n as usize
         {
@@ -212,7 +211,7 @@ impl<'a> BitStream<'a> {
     }
 }
 
-impl Read for BitStream<'_> {
+impl Read for BitStream {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         for i in 0..buf.len() {
             let nread = self
@@ -228,7 +227,7 @@ impl Read for BitStream<'_> {
     }
 }
 
-impl Write for BitStream<'_> {
+impl Write for BitStream {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         let mut written: usize = 0;
         for byte in buf {
@@ -245,8 +244,8 @@ impl Write for BitStream<'_> {
     }
 }
 
-impl<'a> DataTransform<'a> for BitStream<'a> {
-    fn attach_reader(&mut self, src: Box<dyn Read + 'a>) {
+impl DataTransform for BitStream {
+    fn attach_reader(&mut self, src: Box<dyn Read>) {
         self.src = Some(src);
     }
 }
