@@ -6,11 +6,6 @@ mod bitstream;
 pub mod lzss;
 pub mod mtf;
 
-pub trait Compressor {
-    fn compress(&mut self, input_stream: impl Read, output_stream: impl Write) -> Result<()>;
-    fn decompress(&mut self, input_stream: impl Read, output_stream: impl Write) -> Result<()>;
-}
-
 pub trait DataTransform: Read {
     fn attach_reader(&mut self, src: Box<dyn Read>);
 }

@@ -27,6 +27,10 @@ impl BitStream {
         }
     }
 
+    pub fn bits_in_stream(&self) -> usize {
+        self.wbuf_index as usize + self.rbuf_index as usize + (8 * self.bytes.len())
+    }
+
     /// value should contain the bits to be written in the lsb side
     /// write 0b1001 => bs.write_n_bits(0b00001001, 4);
     pub fn write_n_bits(&mut self, n: u8, value: u8) {
@@ -50,14 +54,34 @@ impl BitStream {
         }
     }
 
+    pub fn write_byte(&mut self, byte: u8) {
+        self.write_n_bits(8, byte);
+    }
+    /// value should contain the bits to be written in the lsb side
+    /// write 0b1001 => bs.write_n_bits(0b00001001, 4);
+    pub fn write_n_bits_u64(&mut self, n: u8, value: u64) {
+        assert!(n <= 64, "Cannot write more than 64 bits");
+
+        // stuff into the msb
+        let mut value = value << (64 - n);
+        let full_bytes = n / 8;
+        let leftover = n % 8;
+        for i in 0..full_bytes {
+            self.write_byte((value >> (64 - 8)) as u8);
+            value <<= 8;
+        }
+        if leftover > 0 {
+            self.write_n_bits(leftover, (value >> (64 - leftover)) as u8);
+        }
+    }
+
     /// n bits will be returned on the lsb side
     /// only the right most n bits will be overwritten.
     /// the requested number of bits requested will be zeroed out
     /// returns the number of bits read
     pub fn read_n_bits(&mut self, n: u8, out_buf: &mut u8) -> Result<usize> {
         assert!(n <= 8, "Cannot read more than 8 bits");
-        if (self.wbuf_index as usize + self.rbuf_index as usize + self.bytes.len() * 8) < n as usize
-        {
+        if self.bits_in_stream() < n as usize {
             // request a byte from our source
             if let Some(ref mut src) = self.src {
                 let mut buffer: [u8; BUFF_SIZE] = [0; BUFF_SIZE];
@@ -188,7 +212,7 @@ impl BitStream {
                 return Err(anyhow!("Failed to read leftover bits from bitstream"));
             }
         }
-        Err(anyhow!("Failed to read from bitstream for unknown reason"))
+        return Ok(bits_read);
     }
 
     /// Flushes the buffer to the output stream.
