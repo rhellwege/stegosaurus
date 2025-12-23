@@ -4,6 +4,7 @@ use std::io::{Read, Write};
 pub mod arith;
 mod bitstream;
 pub mod lzss;
+pub mod mtf;
 
 pub trait Compressor {
     fn compress(&mut self, input_stream: impl Read, output_stream: impl Write) -> Result<()>;
