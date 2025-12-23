@@ -58,7 +58,11 @@ impl Read for Pipeline {
 
 #[cfg(test)]
 mod tests {
-    use crate::compression::bitstream::BitStream;
+    use crate::compression::{
+        arith::{AriDecoder, AriEncoder},
+        bitstream::BitStream,
+        mtf::{MtfDecoder, MtfEncoder},
+    };
 
     use super::*;
 
@@ -76,5 +80,26 @@ mod tests {
         let nread = p.read_to_end(&mut output).unwrap();
         assert_eq!(nread, data_src.len());
         assert_eq!(output, data_src);
+    }
+
+    #[test]
+    fn ari_mtf_pipeline() {
+        let src = b"ooijiorgiojio3jioij3jkjn3ngvj3jk49042fjpqjpqr[0r9 q0n[q 0r qer,. ew ,..,er., mwe mmwerl nwe;r nejr nkjkjkafieifijioi34g3gr[g[g[[er[g[e[[[gpwigij3ogookbn  e bkjjkerwjkkll3go4poop3poppv3op4mv34ompv3popom34o3vop34mosfjkglfdlkmm;sdfljgnjksnjktjnkrgjknrtkjnjnkrjjnjkbjknnjjjnnjjnjnjnnjnjbgnbgnbgnngbngbngbngbnngbngbnbgnngbngbnnbgngbnngb]]]]]]]]]]]";
+        let mut encoder = Pipeline::from_reader(Box::new(std::io::Cursor::new(src)))
+            .pipe(Box::new(MtfEncoder::new()))
+            .pipe(Box::new(AriEncoder::new_adaptive_bytes()));
+
+        let mut output_bytes = Vec::new();
+        let _ = encoder.read_to_end(&mut output_bytes);
+        println!("{} ==> {}", src.len(), output_bytes.len());
+        assert!(output_bytes.len() > 0);
+
+        let mut decoder = Pipeline::from_reader(Box::new(std::io::Cursor::new(output_bytes)))
+            .pipe(Box::new(AriDecoder::new_adaptive_bytes()))
+            .pipe(Box::new(MtfDecoder::new()));
+
+        let mut copy_bytes = Vec::new();
+        let _ = decoder.read_to_end(&mut copy_bytes);
+        assert_eq!(src, copy_bytes.as_slice());
     }
 }
