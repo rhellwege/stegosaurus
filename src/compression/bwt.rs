@@ -1,7 +1,7 @@
 // https://zork.net/~st/jottings/sais.html
 mod sais {
     pub fn is_lms(t: &[bool], i: usize) -> bool {
-        t[i] && !t[i - 1]
+        i != 0 && (t[i] && !t[i - 1])
     }
 
     pub fn bucket_sizes(s: &[i32], alphabet_size: u32) -> Vec<u32> {
@@ -242,7 +242,6 @@ mod sais {
     }
 
     fn sais_i32(s: &[i32], alphabet_size: u32) -> Vec<i32> {
-        dbg!(s, alphabet_size);
         // Step 1: classify sufixes as S-type or L-type
         let mut t = vec![false; s.len() + 1]; // is S-type
         for i in (0..s.len() - 2).rev() {
@@ -276,9 +275,28 @@ mod sais {
 
     pub fn sais(s: &[u8]) -> Vec<i32> {
         let s = s.iter().map(|x| *x as i32).collect::<Vec<i32>>();
-        dbg!(&s);
         sais_i32(&s, 256)
     }
+}
+
+pub fn bwt(s: &[u8]) -> (Vec<u8>, usize) {
+    let mut output = vec![0u8; s.len()];
+    let sorted_suffixes = sais::sais(s);
+    let mut original: usize = 0;
+
+    // we dont care about the empty string in element 0
+    for i in 1..sorted_suffixes.len() {
+        let sorted = sorted_suffixes[i];
+        let bwt_index = if sorted == 0 {
+            original = i - 1;
+            s.len() - 1
+        } else {
+            sorted as usize - 1
+        };
+        output[i - 1] = s[bwt_index]
+    }
+
+    (output, original)
 }
 
 #[cfg(test)]
@@ -287,9 +305,15 @@ mod tests {
 
     #[test]
     fn mississippi() {
-        let s = b"mmiissiissiippii";
-        let s = b"cabbage";
+        let s = b"mmiiabscbnnenwgorigmrimskcv,smdklrkgmer s.v serv mmer vme mv msevr ,mer vme slkrjnglkjrgkej b sejb kje skbj krje skjb rkjleeskr9guw09-40f934f094309034f0s9fv09snv09sn 09 90s90j 09j90j990rewb90j0bwroibpweriwbpiowrgjpk'fwor;f;oqwrfowoijiio iooij io iioj ioiojfliwqbfniwqefiowequbfiwbeqioufbiubuiioiuobuiiubuoiubuiuibobuissiissiippii";
         let sa = sais::sais(s.as_slice());
-        dbg!(sa);
+        for n in sa.iter() {
+            dbg!(&s[*n as usize..]);
+        }
+        dbg!(&sa);
+        for i in 1..sa.len() {
+            println!("{}", s[sa[i] as usize]);
+        }
+        // dbg!(bwt(s));
     }
 }
