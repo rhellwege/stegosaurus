@@ -3,8 +3,10 @@ use std::io::{Read, Write};
 
 pub mod arith;
 mod bitstream;
+pub mod bwt;
 pub mod lzss;
 pub mod mtf;
+pub mod rle;
 
 pub trait DataTransform: Read {
     fn attach_reader(&mut self, src: Box<dyn Read>);

@@ -1,6 +1,5 @@
 mod compression;
 use clap::{Arg, Command, Parser};
-use compression::arith;
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Write, stdin, stdout};
 use std::path::PathBuf;
