@@ -204,8 +204,11 @@ impl BitStream {
         if leftover > 0 {
             if let Ok(bits) = self.read_n_bits(leftover, &mut buf_byte) {
                 // stuff into msb first
-                buf_byte <<= 8 - bits;
-                *dest |= (buf_byte as u64) << (64 - bits_read);
+                buf_byte = buf_byte.checked_shl(8 - bits as u32).unwrap_or(0);
+                let buf_byte = (buf_byte as u64)
+                    .checked_shl(64 - bits_read as u32)
+                    .unwrap_or(0);
+                *dest |= buf_byte;
                 bits_read += bits;
                 return Ok(bits_read);
             } else {

@@ -1,3 +1,9 @@
+use std::io::{BufRead, Cursor, Read, Write};
+
+use num::ToPrimitive;
+
+use crate::compression::{DataTransform, bitstream::BitStream};
+
 // https://zork.net/~st/jottings/sais.html
 mod sais {
     pub fn is_lms(t: &[bool], i: usize) -> bool {
@@ -291,6 +297,9 @@ fn slow_sa(s: &[u8]) -> Vec<i32> {
 }
 
 pub fn bwt(s: &[u8]) -> (Vec<u8>, usize) {
+    if s.len() == 1 {
+        return (s.to_vec(), 0);
+    }
     let mut output = vec![0u8; s.len()];
     // hack to get cyclic ordering from suffix array
     // TODO: make a modified sais algorithm that takes into account cycles
@@ -301,7 +310,6 @@ pub fn bwt(s: &[u8]) -> (Vec<u8>, usize) {
         .skip(1)
         .filter(|&i| (i as usize) < s.len())
         .collect();
-    dbg!(&sorted_suffixes);
     // let sorted_suffixes = slow_sa(s);
     let mut original: usize = 0;
 
@@ -336,6 +344,9 @@ fn bucket_heads(bucket_sizes: &[u32]) -> Vec<u32> {
 }
 
 pub fn inverse_bwt(last_column: &[u8], original_idx: usize) -> Vec<u8> {
+    if last_column.len() == 1 {
+        return last_column.to_vec();
+    }
     let mut output = vec![0u8; last_column.len()];
     let mut mapping = vec![0u32; last_column.len()]; // first_column -> last_column
 
@@ -378,8 +389,130 @@ pub fn inverse_bwt(last_column: &[u8], original_idx: usize) -> Vec<u8> {
     output
 }
 
+pub struct BwtEncoder {
+    src: Option<Box<dyn Read>>,
+    output_bs: BitStream,
+    block_size: u32,
+    original_index_bits: u8,
+}
+
+impl DataTransform for BwtEncoder {
+    fn attach_reader(&mut self, src: Box<dyn Read>) {
+        self.src = Some(src);
+    }
+}
+
+impl BwtEncoder {
+    /// Will use the minimal number of bits possible given the block size
+    pub fn new(block_size: u32, original_index_bits: u8) -> Self {
+        BwtEncoder {
+            src: None,
+            output_bs: BitStream::new(),
+            block_size: block_size, // size of the input needed for one block
+            original_index_bits: original_index_bits,
+        }
+    }
+}
+
+impl Read for BwtEncoder {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let requested_bits = buf.len() * 8;
+        let mut src_reader = match self.src.take() {
+            Some(s) => s,
+            None => return Ok(0),
+        };
+
+        let mut input_buf = vec![0u8; self.block_size as usize];
+
+        while self.output_bs.bits_in_stream() < requested_bits {
+            let nread = src_reader.read(&mut input_buf)?;
+            if nread == 0 {
+                self.src = Some(src_reader);
+                return self.output_bs.read(buf);
+            }
+            let (bwt, original_index) = bwt(&input_buf[0..nread]);
+            self.output_bs
+                .write_n_bits_u64(self.original_index_bits, original_index as u64);
+            self.output_bs.write(&bwt);
+        }
+
+        self.src = Some(src_reader);
+        self.output_bs.read(buf)
+    }
+}
+
+pub struct BwtDecoder {
+    src: Option<BitStream>,
+    output_buffer: Cursor<Vec<u8>>,
+    block_size: u32,
+    original_index_bits: u8,
+}
+
+impl DataTransform for BwtDecoder {
+    fn attach_reader(&mut self, src: Box<dyn Read>) {
+        let mut bs = BitStream::new();
+        bs.attach_reader(src);
+        self.src = Some(bs);
+    }
+}
+
+impl BwtDecoder {
+    /// Will use the minimal number of bits possible given the block size
+    pub fn new(block_size: u32, original_index_bits: u8) -> Self {
+        BwtDecoder {
+            src: None,
+            output_buffer: Cursor::new(Vec::new()),
+            block_size: block_size, // size of the input needed for one block
+            original_index_bits: original_index_bits,
+        }
+    }
+}
+
+impl Read for BwtDecoder {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let mut bs = match self.src.take() {
+            Some(s) => s,
+            None => return Ok(0),
+        };
+
+        let mut nread = self.output_buffer.read(buf)?;
+        let mut bwt_input_buf = vec![0u8; self.block_size as usize];
+
+        while nread < buf.len() {
+            let mut original_index: u64 = 0;
+            let bits_read = bs
+                .read_n_bits_u64(self.original_index_bits, &mut original_index)
+                .map_err(|_| std::io::Error::other("failed to read original index in bwt block"))?;
+            if bits_read == 0 {
+                self.src = Some(bs);
+                return Ok(nread);
+            }
+            if bits_read < self.original_index_bits as usize {
+                self.src = Some(bs);
+                return Err(std::io::Error::other(
+                    "unexpected end of message, failed to read original index for bwt",
+                ));
+            }
+            original_index >>= 64 - bits_read;
+
+            let bwt_nread = bs.read(&mut bwt_input_buf)?;
+            let original = inverse_bwt(&bwt_input_buf[0..bwt_nread], original_index as usize);
+
+            let pos = self.output_buffer.position();
+            let nwrite = self.output_buffer.write(&original)?;
+            self.output_buffer.set_position(pos);
+            nread += self.output_buffer.read(&mut buf[nread..])?;
+        }
+
+        self.src = Some(bs);
+        Ok(nread)
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use crate::compression::Pipeline;
+
     use super::*;
 
     #[test]
@@ -401,7 +534,6 @@ mod tests {
         for i in 1..sa.len() {
             println!("{}", s[sa[i] as usize]);
         }
-        // dbg!(bwt(s));
     }
 
     #[test]
@@ -409,8 +541,43 @@ mod tests {
         //        0123456789
         let s = b"PINEAPPLE";
         let s = b"mmiiabsciamgreaitifo fpaimfiamgreatifobnnenwgorigmrimskcv,smdklrkgmer s.v serv mmer vme mv msevr ,mer vme slkrjnglkjrgkej b sejb kje skbj krje skjb rkjleeskr9guw09-40f934f094309034f0s9fv09snv09sn 09 90s90j 09j90j990rewb90j0bwroibpweriwbpiowrgjpk'fwor;f;oqwrfowoijiio iooij io iioj ioiojfliwqbfniwqefiowequbfiwbeqioufbiubuiioiuobuiiubuoiubuiuibobuissiissiippii";
-        let (bwt, original) = bwt(s);
-        let out = inverse_bwt(&bwt, original);
+        let s = b"3pi4ugh4pgph934hfhiuiuhfiouqoiwfooi3riogw3opgw3go34g4i 490rqpiugpiq3 gpiq 3puf piiq3i4 ";
+        let (bwt, original_idx) = bwt(s);
+        let out = inverse_bwt(&bwt, original_idx);
+        dbg!(s, bwt);
         assert_eq!(s, out.as_slice());
+    }
+
+    #[test]
+    fn stream() {
+        let bytestrings = vec![
+            Vec::from(b"3pi4ugh4pgph934hfhiuiuhfiouqoiwfooi3riogw3opgw3go34g4i 490rqpiugpiq3 gpiq 3puf piiq3i4 "),
+            Vec::from(b"9"),
+            Vec::from(b"ab"),
+            Vec::from(b"abc"),
+            Vec::from(b"aaa"),
+            Vec::from(b"aaaaaab"),
+            Vec::from(b"Hello 123"),
+            Vec::from(b"oHello 123 Hello 123"),
+            Vec::from(b"3pi4ugh4pgph934hfhiuiuhfiouqoiwfooi3riogw3opgw3go34g4i 490rqpiugpiq3 gpiq 3puf piiq3i4 "),
+            Vec::from(b"aiourvbpouweghoipwpourohguwo3;gohuiou3qou o3qo4p i42p9 8b19 oias hfwefl wlkrjfnkNLKBKGL IRiaou rpoiue  poi;NP Finpena; oiprgn lhieho;jp lj3knw4gio ;ijeefkvlc;izjv lekjg;l kjwlf jr3oqgn p3i p398240t7092835760934587608934hgiou wbergn;orewir gjweo;rijg o;weijg op4325gj p9245gj p29485jg p93485jg p93485jgp 9384j5gp 98j435p9g j8345p98gj p93458jg p9345jg8 p34958gj 3p459gj8 34p598gj p34598gj p34598gj 4g3p5galejrlakjsfklasjdfkasfjkaskjdfkajsfkwjfkjewfjwogeriugbweiougrboweirubgoweirubgowieurbgowieurbgoiwuerbgoiub"),
+            Vec::from(b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!@#$%^&*()1234567890-=_+[]\\{}|"),
+            Vec::from(b"-------------------------------------------------------------------------------------------------------------------------------------------------------"),
+        ];
+
+        for s in bytestrings {
+            let mut bwt_bits = Vec::new();
+            let _ = Pipeline::from_reader(Box::new(Cursor::new(s.clone())))
+                .pipe(Box::new(BwtEncoder::new(100, 8)))
+                .read_to_end(&mut bwt_bits);
+
+            let mut original = Vec::new();
+
+            let _ = Pipeline::from_reader(Box::new(Cursor::new(bwt_bits.clone())))
+                .pipe(Box::new(BwtDecoder::new(100, 8)))
+                .read_to_end(&mut original);
+
+            assert_eq!(&s, original.as_slice());
+        }
     }
 }
