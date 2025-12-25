@@ -1,3 +1,5 @@
 - multi byte adaptive arithmetic coding
 - implement rle lzss compressors
 - optimise bwt further (modify sais for cyclic string comparisons)
+- optimise with rayon wherever possible
+- optimise the bitstream

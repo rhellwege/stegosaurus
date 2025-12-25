@@ -250,10 +250,10 @@ mod sais {
     fn sais_i32(s: &[i32], alphabet_size: u32) -> Vec<i32> {
         // Step 1: classify sufixes as S-type or L-type
         let mut t = vec![false; s.len() + 1]; // is S-type
-        for i in (0..s.len() - 2).rev() {
+        t[s.len()] = true;
+        for i in (0..s.len() - 1).rev() {
             t[i] = (s[i] < s[i + 1]) || (s[i] == s[i + 1] && t[i + 1]);
         }
-        t[s.len()] = true;
 
         let bucket_sizes = bucket_sizes(s, alphabet_size);
         let mut guessed_sa = guess_sa_lms_sort(s, &bucket_sizes, &t);
@@ -518,6 +518,10 @@ mod tests {
     #[test]
     fn sais_test() {
         let s = b"mmiiabscbnnenwgorigmrimskcv,smdklrkgmer s.v serv mmer vme mv msevr ,mer vme slkrjnglkjrgkej b sejb kje skbj krje skjb rkjleeskr9guw09-40f934f094309034f0s9fv09snv09sn 09 90s90j 09j90j990rewb90j0bwroibpweriwbpiowrgjpk'fwor;f;oqwrfowoijiio iooij io iioj ioiojfliwqbfniwqefiowequbfiwbeqioufbiubuiioiuobuiiubuoiubuiuibobuissiissiippii";
+        let s = &[
+            2, 1, 4, 0, 2, 1,
+            3, //, 1, 0, 1, //, 112, 105, 117, 103, 112, 105, 113, 51, 32, 103,
+        ];
         let sa = &sais::sais(s.as_slice())[1..];
         let sa1 = slow_sa(s.as_slice());
         assert_eq!(sa, sa1);
@@ -568,13 +572,13 @@ mod tests {
         for s in bytestrings {
             let mut bwt_bits = Vec::new();
             let _ = Pipeline::from_reader(Box::new(Cursor::new(s.clone())))
-                .pipe(Box::new(BwtEncoder::new(100, 8)))
+                .pipe(Box::new(BwtEncoder::new(10, 8)))
                 .read_to_end(&mut bwt_bits);
 
             let mut original = Vec::new();
 
             let _ = Pipeline::from_reader(Box::new(Cursor::new(bwt_bits.clone())))
-                .pipe(Box::new(BwtDecoder::new(100, 8)))
+                .pipe(Box::new(BwtDecoder::new(10, 8)))
                 .read_to_end(&mut original);
 
             assert_eq!(&s, original.as_slice());
