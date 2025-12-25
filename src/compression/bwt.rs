@@ -279,29 +279,116 @@ mod sais {
     }
 }
 
+fn slow_sa(s: &[u8]) -> Vec<i32> {
+    let mut out = vec![-1i32; s.len()];
+    for i in 0..out.len() {
+        out[i] = i as i32;
+    }
+
+    out.sort_by(|a, b| s[*a as usize..].cmp(&s[*b as usize..]));
+
+    out
+}
+
 pub fn bwt(s: &[u8]) -> (Vec<u8>, usize) {
     let mut output = vec![0u8; s.len()];
-    let sorted_suffixes = sais::sais(s);
+    // hack to get cyclic ordering from suffix array
+    // TODO: make a modified sais algorithm that takes into account cycles
+    let mut s_doubled = s.to_vec();
+    s_doubled.extend_from_slice(s);
+    let sorted_suffixes: Vec<i32> = sais::sais(&s_doubled)
+        .into_iter()
+        .skip(1)
+        .filter(|&i| (i as usize) < s.len())
+        .collect();
+    dbg!(&sorted_suffixes);
+    // let sorted_suffixes = slow_sa(s);
     let mut original: usize = 0;
 
-    // we dont care about the empty string in element 0
-    for i in 1..sorted_suffixes.len() {
+    for i in 0..sorted_suffixes.len() {
         let sorted = sorted_suffixes[i];
-        let bwt_index = if sorted == 0 {
-            original = i - 1;
-            s.len() - 1
-        } else {
-            sorted as usize - 1
-        };
-        output[i - 1] = s[bwt_index]
+        if sorted == 0 {
+            original = i;
+        }
+        let bwt_index = (sorted as usize + s.len() - 1) % s.len();
+        output[i] = s[bwt_index];
     }
 
     (output, original)
 }
 
+fn bucket_sizes_u8(bytes: &[u8]) -> Vec<u32> {
+    let mut out = vec![0u32; 256];
+    for b in bytes {
+        out[*b as usize] += 1;
+    }
+    out
+}
+
+fn bucket_heads(bucket_sizes: &[u32]) -> Vec<u32> {
+    let mut i = 0u32;
+    let mut res = vec![0u32; bucket_sizes.len()];
+    for (byte, size) in bucket_sizes.iter().enumerate() {
+        res[byte] = i;
+        i += *size as u32;
+    }
+    res
+}
+
+pub fn inverse_bwt(last_column: &[u8], original_idx: usize) -> Vec<u8> {
+    let mut output = vec![0u8; last_column.len()];
+    let mut mapping = vec![0u32; last_column.len()]; // first_column -> last_column
+
+    // Step 1: generate the mapping
+    // note: last_column[i] precedes first_column[i] in the string
+    // note: both are lexicographically sorted
+    // use buckets
+    let bucket_sizes = bucket_sizes_u8(last_column);
+    let mut bucket_heads = bucket_heads(&bucket_sizes);
+    let mut from_buckets = bucket_heads.clone();
+    let mut to_buckets = bucket_heads.clone();
+
+    let mut sorted = vec![0u8; last_column.len()];
+    for i in 0..last_column.len() {
+        let b = last_column[i as usize];
+        sorted[bucket_heads[b as usize] as usize] = b;
+        bucket_heads[b as usize] += 1;
+    }
+
+    // consider last_column, first_column pairs
+    for i in 0..last_column.len() {
+        let x = last_column[i];
+        let y = sorted[i];
+
+        let x_bucket = from_buckets[x as usize];
+        from_buckets[x as usize] += 1;
+
+        let y_bucket = to_buckets[y as usize];
+        to_buckets[y as usize] += 1;
+
+        mapping[x_bucket as usize] = y_bucket as u32;
+    }
+
+    let mut cur = mapping[original_idx] as u32;
+    for i in 0..last_column.len() {
+        output[i] = last_column[cur as usize];
+        cur = mapping[cur as usize];
+    }
+
+    output
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sais_test() {
+        let s = b"mmiiabscbnnenwgorigmrimskcv,smdklrkgmer s.v serv mmer vme mv msevr ,mer vme slkrjnglkjrgkej b sejb kje skbj krje skjb rkjleeskr9guw09-40f934f094309034f0s9fv09snv09sn 09 90s90j 09j90j990rewb90j0bwroibpweriwbpiowrgjpk'fwor;f;oqwrfowoijiio iooij io iioj ioiojfliwqbfniwqefiowequbfiwbeqioufbiubuiioiuobuiiubuoiubuiuibobuissiissiippii";
+        let sa = &sais::sais(s.as_slice())[1..];
+        let sa1 = slow_sa(s.as_slice());
+        assert_eq!(sa, sa1);
+    }
 
     #[test]
     fn mississippi() {
@@ -315,5 +402,15 @@ mod tests {
             println!("{}", s[sa[i] as usize]);
         }
         // dbg!(bwt(s));
+    }
+
+    #[test]
+    fn inverse() {
+        //        0123456789
+        let s = b"PINEAPPLE";
+        let s = b"mmiiabsciamgreaitifo fpaimfiamgreatifobnnenwgorigmrimskcv,smdklrkgmer s.v serv mmer vme mv msevr ,mer vme slkrjnglkjrgkej b sejb kje skbj krje skjb rkjleeskr9guw09-40f934f094309034f0s9fv09snv09sn 09 90s90j 09j90j990rewb90j0bwroibpweriwbpiowrgjpk'fwor;f;oqwrfowoijiio iooij io iioj ioiojfliwqbfniwqefiowequbfiwbeqioufbiubuiioiuobuiiubuoiubuiuibobuissiissiippii";
+        let (bwt, original) = bwt(s);
+        let out = inverse_bwt(&bwt, original);
+        assert_eq!(s, out.as_slice());
     }
 }
