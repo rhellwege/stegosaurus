@@ -41,7 +41,7 @@ impl RleEncoder {
             if nread == 0 {
                 if self.run > RUN_THRESHOLD as u16 {
                     self.src = Some(r);
-                    let ret = Some(self.run as u8 - RUN_THRESHOLD);
+                    let ret = Some((self.run - RUN_THRESHOLD as u16) as u8);
                     self.run = 0;
                     return ret;
                 }
@@ -55,16 +55,18 @@ impl RleEncoder {
                 if self.run >= RUN_THRESHOLD as u16 {
                     self.buf = Some(byte[0]);
                     self.src = Some(r);
-                    let ret = Some(self.run as u8 - RUN_THRESHOLD);
+                    let ret = Some((self.run - RUN_THRESHOLD as u16) as u8);
                     self.run = 1;
                     return ret;
                 }
                 self.run = 1;
             }
 
-            if self.run >= MAX_REPEAT as u16 {
+            if self.run >= MAX_REPEAT as u16 + RUN_THRESHOLD as u16 {
                 self.src = Some(r);
-                return Some(self.run as u8 - RUN_THRESHOLD);
+                let ret = Some((self.run - RUN_THRESHOLD as u16) as u8);
+                self.run = 1;
+                return ret;
             }
             self.most_recent = byte[0];
 
@@ -111,6 +113,7 @@ mod tests {
     fn encode() {
         let test_cases: Vec<(&[u8], &[u8])> = vec![
             (&[0x0, 0x0, 0x0, 0x0, 0x0], &[0x0, 0x0, 0x0, 0x0, 0x1]),
+            (&[0u8; 261], &[0x0, 0x0, 0x0, 0x0, 0xff, 0x0, 0x0]),
             (&[0x1, 0x1, 0x1, 0x1, 0x1], &[0x1, 0x1, 0x1, 0x1, 0x1]),
             // (&[0x0, 0x0, 0x0, 0x0], &[0x0, 0x0, 0x0, 0x0, 0x0]),
             (&[0x0, 0x0, 0x0, 0x0, 0x0, 0x0], &[0x0, 0x0, 0x0, 0x0, 0x2]),
