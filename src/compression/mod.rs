@@ -29,32 +29,44 @@ impl Read for IdentityTransform {
 }
 
 pub struct Pipeline {
-    transform: Box<dyn DataTransform>,
+    transform: Option<Box<dyn DataTransform>>,
 }
 
 impl Pipeline {
-    pub fn new(transform: Box<dyn DataTransform>) -> Self {
-        Pipeline { transform }
+    pub fn new() -> Self {
+        Pipeline { transform: None }
     }
 
     pub fn from_reader(reader: Box<dyn Read>) -> Self {
         Pipeline {
-            transform: Box::new(IdentityTransform { src: reader }),
+            transform: Some(Box::new(IdentityTransform { src: reader })),
         }
     }
 
     pub fn pipe(self, mut new_transform: Box<dyn DataTransform>) -> Self {
-        new_transform.attach_reader(self.transform);
+        if let Some(prev_transform) = self.transform {
+            new_transform.attach_reader(prev_transform);
+        }
 
         Self {
-            transform: new_transform,
+            transform: Some(new_transform),
         }
+    }
+}
+
+impl DataTransform for Pipeline {
+    fn attach_reader(&mut self, src: Box<dyn Read>) {
+        self.transform = Some(Box::new(IdentityTransform { src }));
     }
 }
 
 impl Read for Pipeline {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        self.transform.read(buf)
+        if let Some(ref mut transform) = self.transform {
+            transform.read(buf)
+        } else {
+            Ok(0)
+        }
     }
 }
 
