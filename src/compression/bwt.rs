@@ -310,13 +310,19 @@ pub fn bwt(s: &[u8]) -> (Vec<u8>, usize) {
         .skip(1)
         .filter(|&i| (i as usize) < s.len())
         .collect();
+
+    // println!("    len {}", sorted_suffixes.len());
+    // println!("    slen {}", s.len());
     // let sorted_suffixes = slow_sa(s);
     let mut original: usize = 0;
+
+    dbg!(s.len(), sorted_suffixes.len());
 
     for i in 0..sorted_suffixes.len() {
         let sorted = sorted_suffixes[i];
         if sorted == 0 {
             original = i;
+            dbg!(original);
         }
         let bwt_index = (sorted as usize + s.len() - 1) % s.len();
         output[i] = s[bwt_index];
@@ -344,6 +350,8 @@ fn bucket_heads(bucket_sizes: &[u32]) -> Vec<u32> {
 }
 
 pub fn inverse_bwt(last_column: &[u8], original_idx: usize) -> Vec<u8> {
+    dbg!(last_column.len());
+    dbg!(original_idx);
     if last_column.len() == 1 {
         return last_column.to_vec();
     }
@@ -430,7 +438,9 @@ impl Read for BwtEncoder {
                 self.src = Some(src_reader);
                 return self.output_bs.read(buf);
             }
+            // dbg!(self.block_size, nread);
             let (bwt, original_index) = bwt(&input_buf[0..nread]);
+            // println!("{}", original_index);
             self.output_bs
                 .write_n_bits_u64(self.original_index_bits, original_index as u64);
             self.output_bs.write(&bwt);
@@ -493,7 +503,6 @@ impl Read for BwtDecoder {
                     "unexpected end of message, failed to read original index for bwt",
                 ));
             }
-            original_index >>= 64 - bits_read;
 
             let bwt_nread = bs.read(&mut bwt_input_buf)?;
             let original = inverse_bwt(&bwt_input_buf[0..bwt_nread], original_index as usize);

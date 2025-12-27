@@ -3,3 +3,8 @@
 - optimise bwt further (modify sais for cyclic string comparisons)
 - optimise with rayon wherever possible
 - optimise the bitstream
+
+why 16 bit int max block size
+why rle encoder decoder doesntwork
+why bwt original index bits only works on bytes
+read into buf is not guaranteed to request the number of bytes in the vector

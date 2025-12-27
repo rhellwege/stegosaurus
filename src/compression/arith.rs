@@ -233,8 +233,6 @@ impl Read for AriEncoder {
                 return Ok(out);
             }
 
-            // shift symbol buf to lsb so we can cast to u16
-            symbol_buf >>= 64 - self.bits_per_symbol;
             let _ = self.write_bits_for_symbol(symbol_buf as u16);
         }
     }
@@ -258,8 +256,12 @@ impl DataTransform for AriDecoder {
         bs.attach_reader(src);
         // prime the input pump
         self.value = 0;
-        let _ = bs.read_n_bits_u64(CODE_BITS as u8, &mut self.value);
-        self.value >>= 64 - CODE_BITS;
+        let bits = bs
+            .read_n_bits_u64(CODE_BITS as u8, &mut self.value)
+            .unwrap();
+        println!("{:#064b}", self.value);
+        self.value <<= CODE_BITS - bits;
+        println!("{:#064b}", self.value);
         self.src = Some(bs);
     }
 }

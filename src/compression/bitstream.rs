@@ -171,45 +171,36 @@ impl BitStream {
         if nread == 0 { None } else { Some(bit == 1) }
     }
 
-    /// reads into a byte stuffed into the msb
+    /// reads into a byte stuffed into the lsb
     pub fn read_byte(&mut self, byte: &mut u8) -> Result<usize> {
-        let nread = self.read_n_bits(8, byte)?;
-        if nread < 8 && nread > 0 {
-            *byte <<= 8 - nread;
-        }
-        Ok(nread)
+        self.read_n_bits(8, byte)
     }
 
-    /// reads n bits into the msb
+    /// reads n bits into the lsb
     /// zeroes out destination
     pub fn read_n_bits_u64(&mut self, n: u8, dest: &mut u64) -> Result<usize> {
         let mut buf_byte: u8 = 0;
         let mut bits_read = 0;
-        assert!(n < 64, "Cannot request more than 64 bits into a u64");
+        assert!(n <= 64, "Cannot request more than 64 bits into a u64");
         *dest = 0;
         let full_bytes = n / 8;
         let leftover = n % 8;
         for i in 0..full_bytes {
             if let Ok(bits) = self.read_byte(&mut buf_byte) {
                 bits_read += bits;
-                *dest |= (buf_byte as u64) << (64 - ((i + 1) * 8));
-
                 if bits < 8 {
-                    return Ok(bits_read);
+                    *dest >>= 8 - bits;
                 }
+                *dest |= (buf_byte as u64) << (n - bits_read as u8);
             } else {
                 return Err(anyhow!("failed to read a byte from the bitstream"));
             }
         }
         if leftover > 0 {
             if let Ok(bits) = self.read_n_bits(leftover, &mut buf_byte) {
-                // stuff into msb first
-                buf_byte = buf_byte.checked_shl(8 - bits as u32).unwrap_or(0);
-                let buf_byte = (buf_byte as u64)
-                    .checked_shl(64 - bits_read as u32)
-                    .unwrap_or(0);
-                *dest |= buf_byte;
                 bits_read += bits;
+                *dest >>= n - bits_read as u8;
+                *dest |= buf_byte as u64;
                 return Ok(bits_read);
             } else {
                 return Err(anyhow!("Failed to read leftover bits from bitstream"));
@@ -348,6 +339,27 @@ mod tests {
         let nread = rw.read_n_bits(8, &mut buf).unwrap();
         assert_eq!(nread, 0);
         assert_eq!(buf, 0b00000000);
+    }
+
+    #[test]
+    fn u64_rw() {
+        let mut rw = BitStream::new();
+        let mut buf: u64 = 0;
+
+        rw.write_n_bits_u64(22, 0b0000001111011010);
+        assert_eq!(rw.bits_in_stream(), 22);
+        rw.write_n_bits_u64(7, 0b1110111);
+        assert_eq!(rw.bits_in_stream(), 22 + 7);
+
+        let nread = rw.read_n_bits_u64(22, &mut buf).unwrap();
+        assert_eq!(nread, 22);
+        assert_eq!(rw.bits_in_stream(), 7);
+        assert_eq!(buf, 0b0000001111011010);
+
+        let nread = rw.read_n_bits_u64(10, &mut buf).unwrap();
+        assert_eq!(nread, 7);
+        assert_eq!(rw.bits_in_stream(), 0);
+        assert_eq!(buf, 0b1110111);
     }
 
     #[test]
