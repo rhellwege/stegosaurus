@@ -229,8 +229,29 @@ impl Read for AriEncoder {
             if nread < self.bits_per_symbol as usize {
                 let _ = self.write_eof();
                 self.src = Some(src_reader);
-                let out = self.output_bs.read(buf)?;
-                return Ok(out);
+
+                let mut byte_buf: u8 = 0;
+
+                for i in 0..buf.len() {
+                    let bits = self
+                        .output_bs
+                        .read_byte(&mut byte_buf)
+                        .map_err(|_| std::io::Error::other("failed to byte from symbol stream"))?;
+
+                    if bits == 0 {
+                        return Ok(i);
+                    }
+                    // reading a byte puts bits into the lsb, but we want them in the msb to have trailing zeros
+                    if bits < 8 {
+                        byte_buf <<= 8 - bits;
+                        buf[i] = byte_buf;
+                        return Ok(i + 1);
+                    }
+
+                    buf[i] = byte_buf;
+                }
+
+                return Err(std::io::Error::other("failed to read for unknown reason"));
             }
 
             let _ = self.write_bits_for_symbol(symbol_buf as u16);
