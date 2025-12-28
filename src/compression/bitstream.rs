@@ -4,7 +4,7 @@ use std::io::{Read, Write};
 
 use anyhow::{Context, Result, anyhow};
 
-const BUFF_SIZE: usize = 512;
+const BUFF_SIZE: usize = 1024;
 
 pub struct BitStream {
     src: Option<Box<dyn Read>>,
@@ -75,26 +75,32 @@ impl BitStream {
         }
     }
 
+    fn pull_from_src(&mut self) -> Result<usize> {
+        if let Some(ref mut src) = self.src {
+            let mut buffer: [u8; BUFF_SIZE] = [0; BUFF_SIZE];
+            let nread = src.read(&mut buffer)?;
+            let nwrite = self.write(&buffer[0..nread])?;
+            if nwrite != nread {
+                return Err(anyhow!(
+                    "write to bitstream failed. Expected to write a different number of bytes."
+                ));
+            }
+            return Ok(nread);
+        }
+        Ok(0)
+    }
+
     /// n bits will be returned on the lsb side
-    /// only the right most n bits will be overwritten.
+    /// out_buf will be zeroed out
     /// the requested number of bits requested will be zeroed out
     /// returns the number of bits read
     pub fn read_n_bits(&mut self, n: u8, out_buf: &mut u8) -> Result<usize> {
         assert!(n <= 8, "Cannot read more than 8 bits");
+        // request a byte from our source
         if self.bits_in_stream() < n as usize {
-            // request a byte from our source
-            if let Some(ref mut src) = self.src {
-                let mut buffer: [u8; BUFF_SIZE] = [0; BUFF_SIZE];
-                let nread = src.read(&mut buffer)?;
-                let nwrite = self.write(&buffer[0..nread])?;
-                if nwrite != nread {
-                    return Err(anyhow!(
-                        "write to bitstream failed. Expected to write a different number of bytes."
-                    ));
-                }
-            }
+            let _ = self.pull_from_src()?;
         }
-        *out_buf &= (0xff as u8).checked_shl(n as u32).unwrap_or(0);
+        *out_buf = 0;
         // read from the write buffer
         if self.rbuf_index == 0 && self.bytes.is_empty() {
             if n > self.wbuf_index {
@@ -161,6 +167,37 @@ impl BitStream {
         }
     }
 
+    /// acts as read except does not take away from the stream
+    /// returns the number of bits that would be returned from the equivalent read call
+    /// must be mutable to pull bytes from the parent stream. Does not consume any bits.
+    /// zeroes out the out_buf
+    pub fn peek_n_bits(&mut self, n: u8, out_buf: &mut u8) -> Result<usize> {
+        // request a byte from our source
+        if self.bits_in_stream() < n as usize {
+            let _ = self.pull_from_src()?;
+        }
+        *out_buf = self.rbuf_byte;
+        *out_buf >>= 8 - n;
+        if n <= self.rbuf_index {
+            return Ok(n as usize);
+        }
+        if !self.bytes.is_empty() {
+            *out_buf |= self.bytes[0] >> (8 - n - self.rbuf_index);
+            return Ok(n as usize);
+        }
+        if self.rbuf_index + self.wbuf_index >= n {
+            *out_buf |= self.wbuf_byte >> (n - self.wbuf_index - self.rbuf_index);
+            return Ok(n as usize);
+        }
+        *out_buf >>= n - self.rbuf_index - self.wbuf_index;
+        *out_buf |= self.wbuf_byte;
+        Ok(self.rbuf_index as usize + self.wbuf_index as usize)
+    }
+
+    pub fn peek_byte(&mut self, buf_byte: &mut u8) -> Result<usize> {
+        self.peek_n_bits(8, buf_byte)
+    }
+
     pub fn write_bit(&mut self, bit: bool) {
         self.write_n_bits(1, if bit { 1 } else { 0 });
     }
@@ -196,6 +233,7 @@ impl BitStream {
                 return Err(anyhow!("failed to read a byte from the bitstream"));
             }
         }
+        buf_byte = 0;
         if leftover > 0 {
             if let Ok(bits) = self.read_n_bits(leftover, &mut buf_byte) {
                 bits_read += bits;
@@ -249,7 +287,7 @@ impl Write for BitStream {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         let mut written: usize = 0;
         for byte in buf {
-            self.write_n_bits(8, *byte);
+            self.write_byte(*byte);
             written += 1;
         }
 
@@ -360,6 +398,16 @@ mod tests {
         assert_eq!(nread, 7);
         assert_eq!(rw.bits_in_stream(), 0);
         assert_eq!(buf, 0b1110111);
+
+        rw.write_n_bits_u64(19, 0b0000000001111011010);
+        assert_eq!(rw.bits_in_stream(), 19);
+
+        rw.write_byte(0xff);
+
+        let nread = rw.read_n_bits_u64(19, &mut buf).unwrap();
+        assert_eq!(nread, 19);
+        assert_eq!(rw.bits_in_stream(), 8);
+        assert_eq!(buf, 0b0000000001111011010);
     }
 
     #[test]
@@ -383,5 +431,90 @@ mod tests {
         let nread = rw.read_n_bits(8, &mut buf).unwrap();
         assert_eq!(nread, 0);
         // assert_eq!(buf, 0b0);
+    }
+
+    #[test]
+    fn mixed_rw() {
+        let test_src = b"123456789abcdefghijklmnopqrstuvwxyz";
+
+        let mut rw = BitStream::new();
+        let mut buf: u64 = 0;
+        let mut out_buf = [0u8; 256];
+
+        rw.write_n_bits_u64(22, 0b0000001111011010);
+        assert_eq!(rw.bits_in_stream(), 22);
+
+        rw.write_n_bits_u64(7, 0b1110111);
+        assert_eq!(rw.bits_in_stream(), 22 + 7);
+
+        let nwritten = rw.write(test_src).unwrap();
+        assert_eq!(nwritten, test_src.len());
+        assert_eq!(rw.bits_in_stream(), 22 + 7 + test_src.len() * 8);
+
+        let nread = rw.read_n_bits_u64(22, &mut buf).unwrap();
+        assert_eq!(nread, 22);
+        assert_eq!(rw.bits_in_stream(), 7 + test_src.len() * 8);
+        assert_eq!(buf, 0b0000001111011010);
+
+        let nread = rw.read_n_bits_u64(7, &mut buf).unwrap();
+        assert_eq!(nread, 7);
+        assert_eq!(rw.bits_in_stream(), test_src.len() * 8);
+        assert_eq!(buf, 0b1110111);
+
+        let nread = rw.read(&mut out_buf).unwrap();
+        assert_eq!(nread, test_src.len());
+        assert_eq!(&out_buf[0..nread], test_src.as_slice());
+    }
+
+    #[test]
+    pub fn peek() {
+        let mut rw = BitStream::new();
+        let mut buf: u64 = 0;
+        let mut out_buf = 0u8;
+
+        rw.write_n_bits_u64(12, 0b110111011110);
+        let nread = rw.peek_n_bits(2, &mut out_buf).unwrap();
+        assert_eq!(nread, 2);
+        assert_eq!(out_buf, 0b11);
+        assert_eq!(rw.bits_in_stream(), 12);
+
+        let nread = rw.peek_n_bits(3, &mut out_buf).unwrap();
+        assert_eq!(nread, 3);
+        assert_eq!(out_buf, 0b110);
+        assert_eq!(rw.bits_in_stream(), 12);
+
+        let nread = rw.read_n_bits(2, &mut out_buf).unwrap();
+        assert_eq!(nread, 2);
+        assert_eq!(out_buf, 0b11);
+        assert_eq!(rw.bits_in_stream(), 10);
+
+        let nread = rw.peek_n_bits(5, &mut out_buf).unwrap();
+        assert_eq!(nread, 5);
+        assert_eq!(out_buf, 0b01110);
+        assert_eq!(rw.bits_in_stream(), 10);
+
+        let nread = rw.read_n_bits(5, &mut out_buf).unwrap();
+        assert_eq!(nread, 5);
+        assert_eq!(out_buf, 0b01110);
+        assert_eq!(rw.bits_in_stream(), 5);
+
+        let nread = rw.peek_n_bits(5, &mut out_buf).unwrap();
+        assert_eq!(nread, 5);
+        assert_eq!(out_buf, 0b11110);
+        assert_eq!(rw.bits_in_stream(), 5);
+
+        let nread = rw.peek_n_bits(7, &mut out_buf).unwrap();
+        assert_eq!(nread, 5);
+        assert_eq!(out_buf, 0b11110);
+        assert_eq!(rw.bits_in_stream(), 5);
+
+        let b = rw.read_bit().unwrap();
+        assert!(b);
+        assert_eq!(rw.bits_in_stream(), 4);
+
+        let nread = rw.peek_n_bits(7, &mut out_buf).unwrap();
+        assert_eq!(nread, 4);
+        assert_eq!(out_buf, 0b1110);
+        assert_eq!(rw.bits_in_stream(), 4);
     }
 }

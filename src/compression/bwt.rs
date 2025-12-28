@@ -399,6 +399,7 @@ pub fn inverse_bwt(last_column: &[u8], original_idx: usize) -> Vec<u8> {
 
 pub struct BwtEncoder {
     src: Option<Box<dyn Read>>,
+    payload_transform: Option<Box<dyn DataTransform>>,
     output_bs: BitStream,
     block_size: u32,
     original_index_bits: u8,
@@ -415,6 +416,7 @@ impl BwtEncoder {
     pub fn new(block_size: u32, original_index_bits: u8) -> Self {
         BwtEncoder {
             src: None,
+            payload_transform: None,
             output_bs: BitStream::new(),
             block_size: block_size, // size of the input needed for one block
             original_index_bits: original_index_bits,
@@ -440,7 +442,7 @@ impl Read for BwtEncoder {
             }
             // dbg!(self.block_size, nread);
             let (bwt, original_index) = bwt(&input_buf[0..nread]);
-            // println!("{}", original_index);
+            println!("---< {:#021b} >---", original_index);
             self.output_bs
                 .write_n_bits_u64(self.original_index_bits, original_index as u64);
             self.output_bs.write(&bwt);
@@ -453,8 +455,10 @@ impl Read for BwtEncoder {
 
 pub struct BwtDecoder {
     src: Option<BitStream>,
+    payload_transform: Option<Box<dyn DataTransform>>,
     output_buffer: Cursor<Vec<u8>>,
     block_size: u32,
+    nblocks: usize, // number of blocks decoded
     original_index_bits: u8,
 }
 
@@ -471,8 +475,10 @@ impl BwtDecoder {
     pub fn new(block_size: u32, original_index_bits: u8) -> Self {
         BwtDecoder {
             src: None,
+            payload_transform: None,
             output_buffer: Cursor::new(Vec::new()),
             block_size: block_size, // size of the input needed for one block
+            nblocks: 0,
             original_index_bits: original_index_bits,
         }
     }
@@ -493,18 +499,44 @@ impl Read for BwtDecoder {
             let bits_read = bs
                 .read_n_bits_u64(self.original_index_bits, &mut original_index)
                 .map_err(|_| std::io::Error::other("failed to read original index in bwt block"))?;
+            println!("---> {:#021b} <---", original_index);
             if bits_read == 0 {
                 self.src = Some(bs);
                 return Ok(nread);
             }
             if bits_read < self.original_index_bits as usize {
+                dbg!(bits_read, self.original_index_bits);
                 self.src = Some(bs);
                 return Err(std::io::Error::other(
                     "unexpected end of message, failed to read original index for bwt",
                 ));
             }
 
-            let bwt_nread = bs.read(&mut bwt_input_buf)?;
+            let mut bwt_nread = bs.read(&mut bwt_input_buf)?;
+            self.nblocks += 1;
+            let leftover_bits = (self.nblocks * self.original_index_bits as usize) % 8;
+            // we need to peek at one more byte
+            if bwt_nread < self.block_size as usize {
+                // we are at the last bwt block
+                dbg!(leftover_bits);
+                // We know that the last block had to output a partial byte
+                if leftover_bits != 0 {
+                    println!("LAST BLOCK {}", self.nblocks);
+                    bwt_nread -= 1;
+                    println!(
+                        "{:#010b} {:#010b}",
+                        bwt_input_buf[bwt_nread - 1] as u8,
+                        bwt_input_buf[bwt_nread] as u8
+                    );
+                    println!("{:#010b}", 115 as u8);
+                    let temp = bwt_input_buf[bwt_nread - 1] & (0xff << leftover_bits);
+                    bwt_input_buf[bwt_nread - 1] = temp
+                        | (bwt_input_buf[bwt_nread - 1] << (8 - leftover_bits))
+                        | bwt_input_buf[bwt_nread];
+                    println!("{:#010b}", bwt_input_buf[bwt_nread - 1] as u8);
+                }
+            }
+
             let original = inverse_bwt(&bwt_input_buf[0..bwt_nread], original_index as usize);
 
             let pos = self.output_buffer.position();

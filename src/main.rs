@@ -92,7 +92,7 @@ mod tests {
             (20_000, 15),
             (20_000, 16),
             (100_000, 24),
-            (100_000, 18),
+            (100_000, 19),
             (900_000, 24),
             (900_000, 20),
             (2_000_000, 22),
@@ -128,7 +128,7 @@ mod tests {
                     .map(|r| r.unwrap())
                     .collect();
 
-                assert_eq!(result, src);
+                assert!(result == src, "Bwt did not invert correctly");
             }
         }
     }

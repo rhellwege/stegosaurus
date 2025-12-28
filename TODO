@@ -2,9 +2,15 @@
 - implement rle lzss compressors
 - optimise bwt further (modify sais for cyclic string comparisons)
 - optimise with rayon wherever possible
-- optimise the bitstream
+- optimise the bitstream - simplify read n bits with same logic as peek
 
 why 16 bit int max block size
 why rle encoder decoder doesntwork
 why bwt original index bits only works on bytes
 read into buf is not guaranteed to request the number of bytes in the vector
+
+fix extra byte by peeking ahead at one byte in the bwt decoder
+
+fix rle
+
+make modified rle optimized on mtf and arithmetic coding like bzip
