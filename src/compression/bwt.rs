@@ -543,6 +543,13 @@ impl Read for BwtDecoder {
             let nwrite = self.output_buffer.write(&original)?;
             self.output_buffer.set_position(pos);
             nread += self.output_buffer.read(&mut buf[nread..])?;
+
+            let mut peek_buf = 0u64;
+            let npeeked = bs
+                .peek_n_bits_u64(16, &mut peek_buf)
+                .map_err(|_| std::io::Error::other("failed to peek at bitstream"))?;
+
+            println!("PEEKED {} {:x}", npeeked, peek_buf);
         }
 
         self.src = Some(bs);

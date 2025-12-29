@@ -172,27 +172,7 @@ impl BitStream {
     /// must be mutable to pull bytes from the parent stream. Does not consume any bits.
     /// zeroes out the out_buf
     pub fn peek_n_bits(&mut self, n: u8, out_buf: &mut u8) -> Result<usize> {
-        // self.peek_n_bits_offset(n, out_buf, 0)
-        // request a byte from our source
-        if self.bits_in_stream() < n as usize {
-            let _ = self.pull_from_src()?;
-        }
-        *out_buf = self.rbuf_byte;
-        *out_buf >>= 8 - n;
-        if n <= self.rbuf_index {
-            return Ok(n as usize);
-        }
-        if !self.bytes.is_empty() {
-            *out_buf |= self.bytes[0] >> (8 - n - self.rbuf_index);
-            return Ok(n as usize);
-        }
-        if self.rbuf_index + self.wbuf_index >= n {
-            *out_buf |= self.wbuf_byte >> (n - self.wbuf_index - self.rbuf_index);
-            return Ok(n as usize);
-        }
-        *out_buf >>= n - self.rbuf_index - self.wbuf_index;
-        *out_buf |= self.wbuf_byte;
-        Ok(self.rbuf_index as usize + self.wbuf_index as usize)
+        self.peek_n_bits_offset(n, out_buf, 0)
     }
 
     /// same as peek_n_bits, but skips the offset number of bits
@@ -293,6 +273,22 @@ impl BitStream {
             *out_buf >>= (8 - start_in_byte) - n as usize;
             return Ok(n as usize);
         }
+
+        // 8. read from rbuf + beginning of first byte
+        if !self.bytes.is_empty()
+            && offset_bits < self.rbuf_index as usize
+            && (offset_bits + n as usize) >= self.rbuf_index as usize
+        {
+            let bits_in_left = self.rbuf_index as usize - offset_bits;
+            *out_buf = self.rbuf_byte;
+            *out_buf &= 0xff >> offset_bits;
+            *out_buf >>= 8 - self.rbuf_index;
+            *out_buf <<= n as usize - bits_in_left;
+            let right = self.bytes[0] >> 8 - (n as usize - bits_in_left);
+            *out_buf |= right;
+            return Ok(n as usize);
+        }
+
         // 8. read from rbuf AND wbuf with n overflowing
         if offset_bits < self.rbuf_index as usize
             && (offset_bits + n as usize) > self.rbuf_index as usize
@@ -305,6 +301,7 @@ impl BitStream {
             *out_buf |= self.wbuf_byte;
             return Ok(total_bits - offset_bits);
         }
+
         // 9. read from rbuf AND wbuf with n fitting
         if offset_bits < self.rbuf_index as usize
             && (offset_bits + n as usize) > self.rbuf_index as usize
@@ -336,6 +333,53 @@ impl BitStream {
 
     pub fn peek_byte(&mut self, buf_byte: &mut u8) -> Result<usize> {
         self.peek_n_bits(8, buf_byte)
+    }
+
+    pub fn peek_byte_offset(&mut self, buf_byte: &mut u8, offset_bits: usize) -> Result<usize> {
+        self.peek_n_bits_offset(8, buf_byte, offset_bits)
+    }
+
+    pub fn peek_n_bits_u64_offset(
+        &mut self,
+        n: u8,
+        dest: &mut u64,
+        offset_bits: usize,
+    ) -> Result<usize> {
+        let mut buf_byte: u8 = 0;
+        let mut bits_read = 0;
+        assert!(n <= 64, "Cannot request more than 64 bits into a u64");
+        *dest = 0;
+        let full_bytes = n / 8;
+        let leftover = n % 8;
+        for i in 0..full_bytes {
+            if let Ok(bits) = self.peek_byte_offset(&mut buf_byte, offset_bits + bits_read) {
+                bits_read += bits;
+                if bits < 8 {
+                    *dest >>= 8 - bits;
+                }
+                *dest |= (buf_byte as u64) << (n - bits_read as u8);
+            } else {
+                return Err(anyhow!("failed to peek a byte from the bitstream"));
+            }
+        }
+        buf_byte = 0;
+        if leftover > 0 {
+            if let Ok(bits) =
+                self.peek_n_bits_offset(leftover, &mut buf_byte, offset_bits + bits_read)
+            {
+                bits_read += bits;
+                *dest >>= n - bits_read as u8;
+                *dest |= buf_byte as u64;
+                return Ok(bits_read);
+            } else {
+                return Err(anyhow!("Failed to read leftover bits from bitstream"));
+            }
+        }
+        return Ok(bits_read);
+    }
+
+    pub fn peek_n_bits_u64(&mut self, n: u8, dest: &mut u64) -> Result<usize> {
+        self.peek_n_bits_u64_offset(n, dest, 0)
     }
 
     pub fn write_bit(&mut self, bit: bool) {
@@ -745,6 +789,17 @@ mod tests {
         assert_eq!(npeek, 8);
         assert_eq!(out_buf, 0b10111011);
 
+        // 10011_00110110_10111011_1010
+        //    -- --
+        // 8. rbuf + bytes[0]
+        let npeek = rw.peek_n_bits_offset(4, &mut out_buf, 3).unwrap();
+        assert_eq!(npeek, 4);
+        assert_eq!(out_buf, 0b1100);
+        // ...
+        let npeek = rw.peek_n_bits_offset(7, &mut out_buf, 0).unwrap();
+        assert_eq!(npeek, 7);
+        assert_eq!(out_buf, 0b1001100);
+
         // setup for next tests (empty bytes)
         // 111011_1010
         let mut throwaway = 0u64;
@@ -755,7 +810,7 @@ mod tests {
 
         // 111011_1010
         //    --- -----
-        // 8. rbuf + wbuf + overflow
+        // 9. rbuf + wbuf + overflow
         let npeek = rw.peek_n_bits_offset(8, &mut out_buf, 3).unwrap();
         assert_eq!(npeek, 7);
         assert_eq!(out_buf, 0b0111010);
@@ -766,7 +821,7 @@ mod tests {
 
         // 111011_1010
         //   ---- --
-        // 9. rbuf + wbuf
+        // 10. rbuf + wbuf
         let npeek = rw.peek_n_bits_offset(6, &mut out_buf, 2).unwrap();
         assert_eq!(npeek, 6);
         assert_eq!(out_buf, 0b101110);
