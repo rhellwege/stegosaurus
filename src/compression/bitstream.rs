@@ -172,6 +172,7 @@ impl BitStream {
     /// must be mutable to pull bytes from the parent stream. Does not consume any bits.
     /// zeroes out the out_buf
     pub fn peek_n_bits(&mut self, n: u8, out_buf: &mut u8) -> Result<usize> {
+        // self.peek_n_bits_offset(n, out_buf, 0)
         // request a byte from our source
         if self.bits_in_stream() < n as usize {
             let _ = self.pull_from_src()?;
@@ -192,6 +193,145 @@ impl BitStream {
         *out_buf >>= n - self.rbuf_index - self.wbuf_index;
         *out_buf |= self.wbuf_byte;
         Ok(self.rbuf_index as usize + self.wbuf_index as usize)
+    }
+
+    /// same as peek_n_bits, but skips the offset number of bits
+    /// returns the number of bits read if offset number of bit were consumed
+    /// will cause reads to pull from the source to the internal buffer exhaustively
+    /// zeroes out the output buf
+    pub fn peek_n_bits_offset(
+        &mut self,
+        n: u8,
+        out_buf: &mut u8,
+        offset_bits: usize,
+    ) -> Result<usize> {
+        *out_buf = 0;
+        assert!(n <= 8, "Cannot peek more than 8 bits");
+        // request a bytes until we exhaust the source stream or we have enough to peek at that offset
+        while self.bits_in_stream() <= offset_bits + n as usize {
+            let nread = self.pull_from_src()?;
+            // we have exhausted our source
+            if nread == 0 {
+                break;
+            }
+        }
+        let total_bits = self.bits_in_stream();
+        let bytes_bits = self.bytes.len() * 8;
+        // 1. check if range is to the right of the stream
+        if offset_bits >= total_bits {
+            return Ok(0);
+        }
+        // 2. read from wbuf, with n too large
+        if offset_bits >= self.rbuf_index as usize + bytes_bits
+            && (offset_bits + n as usize) >= total_bits
+        {
+            let start = total_bits - offset_bits; // offset into the wbuf byte from lsb
+            *out_buf = self.wbuf_byte;
+            *out_buf &= 0xff >> 8 - start;
+            return Ok(start);
+        }
+
+        // 3. read from last byte, overflowing to wbuf and end out of bounds
+        if !self.bytes.is_empty()
+            && offset_bits >= self.rbuf_index as usize
+            && (offset_bits + n as usize) >= total_bits
+        {
+            let start_in_byte = (offset_bits - self.rbuf_index as usize) % 8;
+            *out_buf = *self.bytes.back().unwrap();
+            *out_buf &= 0xff >> start_in_byte;
+            *out_buf <<= self.wbuf_index;
+            *out_buf |= self.wbuf_byte;
+            return Ok((8 - start_in_byte as usize) + self.wbuf_index as usize);
+        }
+
+        // 4. read from wbuf, with n fitting inside
+        if offset_bits >= self.rbuf_index as usize + bytes_bits {
+            let start = total_bits - offset_bits; // offset into the wbuf byte from lsb
+            *out_buf = self.wbuf_byte;
+            *out_buf &= 0xff >> 8 - start;
+            *out_buf >>= start - n as usize;
+            return Ok(n as usize);
+        }
+
+        let start_in_byte = (offset_bits
+            .checked_sub(self.rbuf_index as usize)
+            .unwrap_or(0))
+            % 8;
+
+        // 5. read from the last byte overflowing to wbuf, n fits
+        if !self.bytes.is_empty()
+            && offset_bits >= self.rbuf_index as usize
+            && (offset_bits + n as usize) >= self.rbuf_index as usize + bytes_bits
+        {
+            *out_buf = *self.bytes.back().unwrap();
+            *out_buf &= 0xff >> start_in_byte;
+            *out_buf <<= n as usize - (8 - start_in_byte);
+            let right =
+                self.wbuf_byte >> self.wbuf_index as usize - (n as usize - (8 - start_in_byte));
+            *out_buf |= right;
+            return Ok(n as usize);
+        }
+        // 6. read from in between two bytes
+        if !self.bytes.is_empty()
+            && offset_bits >= self.rbuf_index as usize
+            && n as usize > (8 - start_in_byte)
+        {
+            let start_idx = (offset_bits - self.rbuf_index as usize) / 8;
+            let end_idx = start_idx + 1;
+            *out_buf = self.bytes[start_idx];
+            *out_buf &= 0xff >> start_in_byte;
+            *out_buf <<= n as usize - (8 - start_in_byte);
+            let right = self.bytes[end_idx] >> 8 - (n as usize - (8 - start_in_byte));
+            *out_buf |= right;
+            return Ok(n as usize);
+        }
+        // 7. read from within a byte
+        if !self.bytes.is_empty() && offset_bits >= self.rbuf_index as usize {
+            let start_idx = (offset_bits - self.rbuf_index as usize) / 8;
+            *out_buf = self.bytes[start_idx];
+            *out_buf &= 0xff >> start_in_byte;
+            *out_buf >>= (8 - start_in_byte) - n as usize;
+            return Ok(n as usize);
+        }
+        // 8. read from rbuf AND wbuf with n overflowing
+        if offset_bits < self.rbuf_index as usize
+            && (offset_bits + n as usize) > self.rbuf_index as usize
+            && (offset_bits + n as usize) > total_bits
+        {
+            *out_buf = self.rbuf_byte;
+            *out_buf &= 0xff >> offset_bits;
+            *out_buf >>= 8 - self.rbuf_index;
+            *out_buf <<= self.wbuf_index;
+            *out_buf |= self.wbuf_byte;
+            return Ok(total_bits - offset_bits);
+        }
+        // 9. read from rbuf AND wbuf with n fitting
+        if offset_bits < self.rbuf_index as usize
+            && (offset_bits + n as usize) > self.rbuf_index as usize
+        {
+            let bits_in_left = self.rbuf_index as usize - offset_bits;
+            *out_buf = self.rbuf_byte;
+            *out_buf &= 0xff >> offset_bits;
+            *out_buf >>= 8 - self.rbuf_index;
+            *out_buf <<= n as usize - bits_in_left;
+            let right = self.wbuf_byte >> self.wbuf_index as usize - (n as usize - bits_in_left);
+            *out_buf |= right;
+            return Ok(n as usize);
+        }
+        // 10. read from rbuf and overflow
+        if offset_bits < self.rbuf_index as usize
+            && (offset_bits + n as usize) > self.rbuf_index as usize
+        {
+            *out_buf = self.rbuf_byte;
+            *out_buf &= 0xff >> offset_bits;
+            *out_buf >>= 8 - offset_bits - self.rbuf_index as usize;
+            return Ok(total_bits - offset_bits);
+        }
+        // 11. read from rbuf alone
+        *out_buf = self.rbuf_byte;
+        *out_buf &= 0xff >> offset_bits;
+        *out_buf >>= 8 - offset_bits - n as usize;
+        return Ok(n as usize);
     }
 
     pub fn peek_byte(&mut self, buf_byte: &mut u8) -> Result<usize> {
@@ -516,5 +656,134 @@ mod tests {
         assert_eq!(nread, 4);
         assert_eq!(out_buf, 0b1110);
         assert_eq!(rw.bits_in_stream(), 4);
+    }
+
+    #[test]
+    fn peek_bits_offset() {
+        let mut rw = BitStream::new();
+        let mut out_buf = 0u8;
+        // 00000000 00000000
+        rw.write_n_bits_u64(28, 0b000_10011_00110110_10111011_1010);
+
+        let nread = rw.read_n_bits(3, &mut out_buf).unwrap();
+        assert_eq!(nread, 3);
+        assert_eq!(out_buf, 0b000);
+
+        // 10011_00110110_10111011_1010
+        //                              -----
+        // 1. offset out of bounds
+        let npeek = rw.peek_n_bits_offset(5, &mut out_buf, 25).unwrap();
+        assert_eq!(npeek, 0);
+        assert_eq!(out_buf, 0);
+        // 10011_00110110_10111011_1010
+        //                          -----
+        // 2. wbuf + overflow
+        let npeek = rw.peek_n_bits_offset(5, &mut out_buf, 22).unwrap();
+        assert_eq!(npeek, 3);
+        assert_eq!(out_buf, 0b010);
+
+        // 10011_00110110_10111011_1010
+        //                          --
+        // 3. wbuf
+        let npeek = rw.peek_n_bits_offset(2, &mut out_buf, 22).unwrap();
+        assert_eq!(npeek, 2);
+        assert_eq!(out_buf, 0b01);
+        // ...
+        let npeek = rw.peek_n_bits_offset(4, &mut out_buf, 21).unwrap();
+        assert_eq!(npeek, 4);
+        assert_eq!(out_buf, 0b1010);
+
+        // 10011_00110110_10111011_1010
+        //                      -- ------
+        // 4. last byte + wbuf + overflow
+        let npeek = rw.peek_n_bits_offset(8, &mut out_buf, 19).unwrap();
+        assert_eq!(npeek, 6);
+        assert_eq!(out_buf, 0b111010);
+
+        // 10011_00110110_10111011_1010
+        //                      -- ---
+        // 5. last byte + wbuf
+        let npeek = rw.peek_n_bits_offset(5, &mut out_buf, 19).unwrap();
+        assert_eq!(npeek, 5);
+        assert_eq!(out_buf, 0b11101);
+        // ...
+        let npeek = rw.peek_n_bits_offset(4, &mut out_buf, 20).unwrap();
+        assert_eq!(npeek, 4);
+        assert_eq!(out_buf, 0b1101);
+        // ...
+        let npeek = rw.peek_n_bits_offset(6, &mut out_buf, 19).unwrap();
+        assert_eq!(npeek, 6);
+        assert_eq!(out_buf, 0b111010);
+
+        // 10011_00110110_10111011_1010
+        //             -- --
+        // 6. between two bytes
+        let npeek = rw.peek_n_bits_offset(4, &mut out_buf, 11).unwrap();
+        assert_eq!(npeek, 4);
+        assert_eq!(out_buf, 0b1010);
+        // ...
+        let npeek = rw.peek_n_bits_offset(6, &mut out_buf, 10).unwrap();
+        assert_eq!(npeek, 6);
+        assert_eq!(out_buf, 0b110101);
+
+        // 10011_00110110_10111011_1010
+        //         ----
+        // 7. within a byte
+        let npeek = rw.peek_n_bits_offset(4, &mut out_buf, 7).unwrap();
+        assert_eq!(npeek, 4);
+        assert_eq!(out_buf, 0b1101);
+        // ...
+        let npeek = rw.peek_n_bits_offset(6, &mut out_buf, 14).unwrap();
+        assert_eq!(npeek, 6);
+        assert_eq!(out_buf, 0b011101);
+        // ...
+        let npeek = rw.peek_n_bits_offset(8, &mut out_buf, 5).unwrap();
+        assert_eq!(npeek, 8);
+        assert_eq!(out_buf, 0b00110110);
+        // ...
+        let npeek = rw.peek_n_bits_offset(8, &mut out_buf, 13).unwrap();
+        assert_eq!(npeek, 8);
+        assert_eq!(out_buf, 0b10111011);
+
+        // setup for next tests (empty bytes)
+        // 111011_1010
+        let mut throwaway = 0u64;
+        let nread = rw.read_n_bits_u64(15, &mut throwaway).unwrap();
+        assert_eq!(nread, 15);
+        assert_eq!(throwaway, 0b10011_00110110_10);
+        assert_eq!(rw.bits_in_stream(), 10);
+
+        // 111011_1010
+        //    --- -----
+        // 8. rbuf + wbuf + overflow
+        let npeek = rw.peek_n_bits_offset(8, &mut out_buf, 3).unwrap();
+        assert_eq!(npeek, 7);
+        assert_eq!(out_buf, 0b0111010);
+        // ...
+        let npeek = rw.peek_n_bits_offset(7, &mut out_buf, 4).unwrap();
+        assert_eq!(npeek, 6);
+        assert_eq!(out_buf, 0b111010);
+
+        // 111011_1010
+        //   ---- --
+        // 9. rbuf + wbuf
+        let npeek = rw.peek_n_bits_offset(6, &mut out_buf, 2).unwrap();
+        assert_eq!(npeek, 6);
+        assert_eq!(out_buf, 0b101110);
+        // ...
+        let npeek = rw.peek_n_bits_offset(6, &mut out_buf, 4).unwrap();
+        assert_eq!(npeek, 6);
+        assert_eq!(out_buf, 0b111010);
+        // ...
+        let npeek = rw.peek_n_bits_offset(8, &mut out_buf, 0).unwrap();
+        assert_eq!(npeek, 8);
+        assert_eq!(out_buf, 0b11101110);
+        // ...
+        let npeek = rw.peek_n_bits_offset(8, &mut out_buf, 1).unwrap();
+        assert_eq!(npeek, 8);
+        assert_eq!(out_buf, 0b11011101);
+
+        // setup so that only rbuf has bits
+        // might be an impossible state
     }
 }
