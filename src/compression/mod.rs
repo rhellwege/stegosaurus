@@ -1,8 +1,10 @@
 use anyhow::Result;
 use std::io::{Read, Write};
 
+use crate::compression::bitstream::BitStream;
+
 pub mod arith;
-mod bitstream;
+pub mod bitstream;
 pub mod bwt;
 pub mod lzss;
 pub mod mtf;
@@ -10,6 +12,10 @@ pub mod rle;
 
 pub trait DataTransform: Read {
     fn attach_reader(&mut self, src: Box<dyn Read>);
+}
+
+pub trait BitStreamDataTransform: DataTransform {
+    fn output_bitstream(&mut self) -> &mut BitStream;
 }
 
 pub struct IdentityTransform {
@@ -52,6 +58,19 @@ impl Pipeline {
             transform: Some(new_transform),
         }
     }
+
+    pub fn pipe_bitstream(
+        self,
+        mut new_transform: Box<dyn BitStreamDataTransform>,
+    ) -> BitStreamPipeline {
+        if let Some(prev_transform) = self.transform {
+            new_transform.attach_reader(prev_transform);
+        }
+
+        BitStreamPipeline {
+            transform: Some(new_transform),
+        }
+    }
 }
 
 impl DataTransform for Pipeline {
@@ -61,6 +80,33 @@ impl DataTransform for Pipeline {
 }
 
 impl Read for Pipeline {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if let Some(ref mut transform) = self.transform {
+            transform.read(buf)
+        } else {
+            Ok(0)
+        }
+    }
+}
+
+/// pipeline with a tail that implements Bitstream data transform
+pub struct BitStreamPipeline {
+    transform: Option<Box<dyn BitStreamDataTransform>>,
+}
+
+impl BitStreamPipeline {
+    // pub fn new() -> Self {}
+}
+
+impl DataTransform for BitStreamPipeline {
+    fn attach_reader(&mut self, src: Box<dyn Read>) {
+        let mut bs = BitStream::new();
+        bs.attach_reader(src);
+        // self.transform = Some(Box::new();
+    }
+}
+
+impl Read for BitStreamPipeline {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         if let Some(ref mut transform) = self.transform {
             transform.read(buf)

@@ -14,3 +14,6 @@ fix extra byte by peeking ahead at one byte in the bwt decoder
 fix rle
 
 make modified rle optimized on mtf and arithmetic coding like bzip
+
+change arithmetic encoding eof behavior to allow symbols after eof so we can write separate messages with the same model
+add arithmetic encoding tests to add bits after an arithmetic encoding eof to see if the decoder will leave the bits after the eof alone

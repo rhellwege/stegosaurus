@@ -316,13 +316,10 @@ pub fn bwt(s: &[u8]) -> (Vec<u8>, usize) {
     // let sorted_suffixes = slow_sa(s);
     let mut original: usize = 0;
 
-    dbg!(s.len(), sorted_suffixes.len());
-
     for i in 0..sorted_suffixes.len() {
         let sorted = sorted_suffixes[i];
         if sorted == 0 {
             original = i;
-            dbg!(original);
         }
         let bwt_index = (sorted as usize + s.len() - 1) % s.len();
         output[i] = s[bwt_index];
@@ -350,8 +347,6 @@ fn bucket_heads(bucket_sizes: &[u32]) -> Vec<u32> {
 }
 
 pub fn inverse_bwt(last_column: &[u8], original_idx: usize) -> Vec<u8> {
-    dbg!(last_column.len());
-    dbg!(original_idx);
     if last_column.len() == 1 {
         return last_column.to_vec();
     }
@@ -440,9 +435,7 @@ impl Read for BwtEncoder {
                 self.src = Some(src_reader);
                 return self.output_bs.read(buf);
             }
-            // dbg!(self.block_size, nread);
             let (bwt, original_index) = bwt(&input_buf[0..nread]);
-            println!("---< {:#021b} >---", original_index);
             self.output_bs
                 .write_n_bits_u64(self.original_index_bits, original_index as u64);
             self.output_bs.write(&bwt);
@@ -499,13 +492,11 @@ impl Read for BwtDecoder {
             let bits_read = bs
                 .read_n_bits_u64(self.original_index_bits, &mut original_index)
                 .map_err(|_| std::io::Error::other("failed to read original index in bwt block"))?;
-            println!("---> {:#021b} <---", original_index);
             if bits_read == 0 {
                 self.src = Some(bs);
                 return Ok(nread);
             }
             if bits_read < self.original_index_bits as usize {
-                dbg!(bits_read, self.original_index_bits);
                 self.src = Some(bs);
                 return Err(std::io::Error::other(
                     "unexpected end of message, failed to read original index for bwt",
@@ -515,26 +506,41 @@ impl Read for BwtDecoder {
             let mut bwt_nread = bs.read(&mut bwt_input_buf)?;
             self.nblocks += 1;
             let leftover_bits = (self.nblocks * self.original_index_bits as usize) % 8;
+            let mut peek_buf = 0u8;
+            let npeeked = bs
+                .peek_byte(&mut peek_buf)
+                .map_err(|_| std::io::Error::other("failed to peek at bitstream"))?;
+
             // we need to peek at one more byte
-            if bwt_nread < self.block_size as usize {
+            if npeeked == 0 || bwt_nread < self.block_size as usize {
                 // we are at the last bwt block
-                dbg!(leftover_bits);
                 // We know that the last block had to output a partial byte
                 if leftover_bits != 0 {
-                    println!("LAST BLOCK {}", self.nblocks);
                     bwt_nread -= 1;
-                    println!(
-                        "{:#010b} {:#010b}",
-                        bwt_input_buf[bwt_nread - 1] as u8,
-                        bwt_input_buf[bwt_nread] as u8
-                    );
-                    println!("{:#010b}", 115 as u8);
                     let temp = bwt_input_buf[bwt_nread - 1] & (0xff << leftover_bits);
                     bwt_input_buf[bwt_nread - 1] = temp
                         | (bwt_input_buf[bwt_nread - 1] << (8 - leftover_bits))
                         | bwt_input_buf[bwt_nread];
-                    println!("{:#010b}", bwt_input_buf[bwt_nread - 1] as u8);
                 }
+            }
+
+            // we are at the end of the stream, but there are leftover bits
+            if npeeked > 0 && npeeked < 8 {
+                if npeeked != (8 - leftover_bits) {
+                    self.src = Some(bs);
+                    return Err(std::io::Error::other(
+                        "unexpected end of message, failed to decode the last block",
+                    ));
+                }
+                // actually read the bits now
+                let nread = bs
+                    .read_byte(&mut peek_buf)
+                    .map_err(|_| std::io::Error::other("failed to final bits"))?;
+
+                let temp = bwt_input_buf[self.block_size as usize - 1] & (0xff << leftover_bits);
+                bwt_input_buf[self.block_size as usize - 1] = temp
+                    | (bwt_input_buf[self.block_size as usize - 1] << (8 - leftover_bits))
+                    | peek_buf;
             }
 
             let original = inverse_bwt(&bwt_input_buf[0..bwt_nread], original_index as usize);
@@ -543,13 +549,6 @@ impl Read for BwtDecoder {
             let nwrite = self.output_buffer.write(&original)?;
             self.output_buffer.set_position(pos);
             nread += self.output_buffer.read(&mut buf[nread..])?;
-
-            let mut peek_buf = 0u64;
-            let npeeked = bs
-                .peek_n_bits_u64(16, &mut peek_buf)
-                .map_err(|_| std::io::Error::other("failed to peek at bitstream"))?;
-
-            println!("PEEKED {} {:x}", npeeked, peek_buf);
         }
 
         self.src = Some(bs);

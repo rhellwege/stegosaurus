@@ -203,7 +203,7 @@ impl BitStream {
         }
         // 2. read from wbuf, with n too large
         if offset_bits >= self.rbuf_index as usize + bytes_bits
-            && (offset_bits + n as usize) >= total_bits
+            && (offset_bits + n as usize) > total_bits
         {
             let start = total_bits - offset_bits; // offset into the wbuf byte from lsb
             *out_buf = self.wbuf_byte;
@@ -214,7 +214,7 @@ impl BitStream {
         // 3. read from last byte, overflowing to wbuf and end out of bounds
         if !self.bytes.is_empty()
             && offset_bits >= self.rbuf_index as usize
-            && (offset_bits + n as usize) >= total_bits
+            && (offset_bits + n as usize) > total_bits
         {
             let start_in_byte = (offset_bits - self.rbuf_index as usize) % 8;
             *out_buf = *self.bytes.back().unwrap();
@@ -241,7 +241,7 @@ impl BitStream {
         // 5. read from the last byte overflowing to wbuf, n fits
         if !self.bytes.is_empty()
             && offset_bits >= self.rbuf_index as usize
-            && (offset_bits + n as usize) >= self.rbuf_index as usize + bytes_bits
+            && (offset_bits + n as usize) > self.rbuf_index as usize + bytes_bits
         {
             *out_buf = *self.bytes.back().unwrap();
             *out_buf &= 0xff >> start_in_byte;
@@ -277,7 +277,7 @@ impl BitStream {
         // 8. read from rbuf + beginning of first byte
         if !self.bytes.is_empty()
             && offset_bits < self.rbuf_index as usize
-            && (offset_bits + n as usize) >= self.rbuf_index as usize
+            && (offset_bits + n as usize) > self.rbuf_index as usize
         {
             let bits_in_left = self.rbuf_index as usize - offset_bits;
             *out_buf = self.rbuf_byte;
@@ -289,7 +289,7 @@ impl BitStream {
             return Ok(n as usize);
         }
 
-        // 8. read from rbuf AND wbuf with n overflowing
+        // 9. read from rbuf AND wbuf with n overflowing
         if offset_bits < self.rbuf_index as usize
             && (offset_bits + n as usize) > self.rbuf_index as usize
             && (offset_bits + n as usize) > total_bits
@@ -302,7 +302,7 @@ impl BitStream {
             return Ok(total_bits - offset_bits);
         }
 
-        // 9. read from rbuf AND wbuf with n fitting
+        // 10. read from rbuf AND wbuf with n fitting
         if offset_bits < self.rbuf_index as usize
             && (offset_bits + n as usize) > self.rbuf_index as usize
         {
@@ -315,7 +315,7 @@ impl BitStream {
             *out_buf |= right;
             return Ok(n as usize);
         }
-        // 10. read from rbuf and overflow
+        // 11. read from rbuf and overflow
         if offset_bits < self.rbuf_index as usize
             && (offset_bits + n as usize) > self.rbuf_index as usize
         {
@@ -324,7 +324,7 @@ impl BitStream {
             *out_buf >>= 8 - offset_bits - self.rbuf_index as usize;
             return Ok(total_bits - offset_bits);
         }
-        // 11. read from rbuf alone
+        // 12. read from rbuf alone
         *out_buf = self.rbuf_byte;
         *out_buf &= 0xff >> offset_bits;
         *out_buf >>= 8 - offset_bits - n as usize;

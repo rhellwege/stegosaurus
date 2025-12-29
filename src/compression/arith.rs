@@ -1,4 +1,4 @@
-use crate::compression::DataTransform;
+use crate::compression::{BitStreamDataTransform, DataTransform};
 
 use super::bitstream::BitStream;
 use anyhow::{Context, Result, anyhow};
@@ -98,6 +98,12 @@ impl DataTransform for AriEncoder {
         let mut bs = BitStream::new();
         bs.attach_reader(src);
         self.src = Some(bs);
+    }
+}
+
+impl BitStreamDataTransform for AriEncoder {
+    fn output_bitstream(&mut self) -> &mut BitStream {
+        &mut self.output_bs
     }
 }
 
