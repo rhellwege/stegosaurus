@@ -1,16 +1,39 @@
-use std::io::{BufRead, Cursor, Read, Write};
+use std::{
+    cell::RefCell,
+    io::{BufRead, Cursor, Read, Write},
+    rc::Rc,
+};
 
 use num::ToPrimitive;
 
-use crate::compression::{DataTransform, bitstream::BitStream};
+use crate::compression::{DataTransform, RcReader, bitstream::BitStream};
 
 // https://zork.net/~st/jottings/sais.html
 mod sais {
+    use rayon::prelude::*;
+
     pub fn is_lms(t: &[bool], i: usize) -> bool {
         i != 0 && (t[i] && !t[i - 1])
     }
 
     pub fn bucket_sizes(s: &[i32], alphabet_size: u32) -> Vec<u32> {
+        // s.par_iter()
+        //     .fold(
+        //         || vec![0u32; alphabet_size as usize],
+        //         |mut acc, &element| {
+        //             acc[element as usize] += 1;
+        //             acc
+        //         },
+        //     )
+        //     .reduce(
+        //         || vec![0u32; alphabet_size as usize],
+        //         |mut acc, part| {
+        //             for (i, &freq) in part.iter().enumerate() {
+        //                 acc[i] += freq;
+        //             }
+        //             acc
+        //         },
+        //     )
         let mut b = vec![0; alphabet_size as usize];
         for c in s {
             b[*c as usize] += 1;
@@ -417,6 +440,20 @@ impl BwtEncoder {
             original_index_bits: original_index_bits,
         }
     }
+
+    pub fn new_with_payload_transform(
+        block_size: u32,
+        original_index_bits: u8,
+        payload_transform: Box<dyn DataTransform>,
+    ) -> Self {
+        BwtEncoder {
+            src: None,
+            payload_transform: Some(payload_transform),
+            output_bs: BitStream::new(),
+            block_size: block_size, // size of the input needed for one block
+            original_index_bits: original_index_bits,
+        }
+    }
 }
 
 impl Read for BwtEncoder {
@@ -438,7 +475,15 @@ impl Read for BwtEncoder {
             let (bwt, original_index) = bwt(&input_buf[0..nread]);
             self.output_bs
                 .write_n_bits_u64(self.original_index_bits, original_index as u64);
-            self.output_bs.write(&bwt);
+            // run through the payload transform
+            if let Some(ref mut transform) = self.payload_transform {
+                transform.attach_reader(Box::new(std::io::Cursor::new(bwt)));
+                let mut transformed: Vec<u8> = Vec::new();
+                let _ = transform.read_to_end(&mut transformed)?;
+                let _ = self.output_bs.write(&transformed);
+            } else {
+                let _ = self.output_bs.write(&bwt);
+            }
         }
 
         self.src = Some(src_reader);
@@ -469,6 +514,21 @@ impl BwtDecoder {
         BwtDecoder {
             src: None,
             payload_transform: None,
+            output_buffer: Cursor::new(Vec::new()),
+            block_size: block_size, // size of the input needed for one block
+            nblocks: 0,
+            original_index_bits: original_index_bits,
+        }
+    }
+
+    pub fn new_with_payload_transform(
+        block_size: u32,
+        original_index_bits: u8,
+        payload_transform: Box<dyn DataTransform>,
+    ) -> Self {
+        BwtDecoder {
+            src: None,
+            payload_transform: Some(payload_transform),
             output_buffer: Cursor::new(Vec::new()),
             block_size: block_size, // size of the input needed for one block
             nblocks: 0,

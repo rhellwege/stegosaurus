@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use crate::compression::Pipeline;
 use crate::compression::arith::{AriDecoder, AriEncoder};
 use crate::compression::bwt::{BwtDecoder, BwtEncoder};
+use crate::compression::bzrle::{BzrleDecoder, BzrleEncoder};
 use crate::compression::mtf::{MtfDecoder, MtfEncoder};
 use crate::compression::rle::{RleDecoder, RleEncoder};
 
@@ -32,42 +33,44 @@ struct Cli {
 
 fn make_compressor(src: Box<dyn Read>) -> Pipeline {
     Pipeline::from_reader(src)
-        .pipe(Box::new(BwtEncoder::new(100000, 23)))
+        .pipe(Box::new(BwtEncoder::new(2u32.pow(24), 24)))
         .pipe(Box::new(MtfEncoder::new()))
-    // .pipe(Box::new(RleEncoder::new()))
-    // .pipe(Box::new(AriEncoder::new_adaptive_bytes()))
+        .pipe(Box::new(BzrleEncoder::new(0, 256, 16)))
+        .pipe(Box::new(AriEncoder::new_adaptive(16, 256)))
 }
 
 fn make_decompressor(src: Box<dyn Read>) -> Pipeline {
     Pipeline::from_reader(src)
-        // .pipe(Box::new(AriDecoder::new_adaptive_bytes()))
-        // .pipe(Box::new(RleDecoder::new()))
+        .pipe(Box::new(AriDecoder::new_adaptive(16, 256)))
+        .pipe(Box::new(BzrleDecoder::new(0, 256, 16)))
         .pipe(Box::new(MtfDecoder::new()))
-        .pipe(Box::new(BwtDecoder::new(100000, 23)))
+        .pipe(Box::new(BwtDecoder::new(2u32.pow(24), 24)))
 }
 
 fn main() {
     let cli = Cli::parse();
 
-    let input_stream: BufReader<Box<dyn Read>> = match cli._in {
-        Some(path) => BufReader::new(Box::new(File::open(path).unwrap())),
-        None => BufReader::new(Box::new(stdin())),
+    let input_stream: Box<dyn Read> = match cli._in {
+        Some(path) => Box::new(File::open(path).unwrap()),
+        None => Box::new(stdin()),
     };
 
-    let mut output_stream: BufWriter<Box<dyn Write>> = match cli.out {
-        Some(path) => BufWriter::new(Box::new(File::create(&path).unwrap())),
-        None => BufWriter::new(Box::new(stdout())),
+    let mut output_stream: Box<dyn Write> = match cli.out {
+        Some(path) => Box::new(File::create(&path).unwrap()),
+        None => Box::new(stdout()),
     };
 
-    let pipeline = if cli.compress || (!cli.compress && !cli.decompress) {
+    let mut pipeline = if cli.compress || (!cli.compress && !cli.decompress) {
         make_compressor(Box::new(input_stream))
     } else {
         make_decompressor(Box::new(input_stream))
     };
 
-    for byte in pipeline.bytes() {
-        let _ = output_stream.write_all(&[byte.unwrap()]);
-    }
+    let mut output: Vec<u8> = Vec::new();
+
+    pipeline.read_to_end(&mut output);
+
+    output_stream.write_all(&output);
 }
 
 #[cfg(test)]
@@ -77,10 +80,46 @@ mod tests {
         io::{BufReader, Cursor, Read},
     };
 
-    use crate::compression::{
-        Pipeline,
-        bwt::{BwtDecoder, BwtEncoder},
+    use crate::{
+        compression::{
+            Pipeline,
+            arith::{AriDecoder, AriEncoder},
+            bwt::{BwtDecoder, BwtEncoder},
+            mtf::{MtfDecoder, MtfEncoder},
+        },
+        make_compressor, make_decompressor,
     };
+
+    #[test]
+    fn e2e() {
+        let tests_dir = std::env::current_dir().unwrap().join("tests"); //.join("../tests");
+        for entry in std::fs::read_dir(tests_dir).unwrap() {
+            let entry = entry.unwrap();
+            let file_path = entry.path();
+            println!(
+                "-----------------------------------------------------------------------------"
+            );
+            println!("{}", file_path.to_string_lossy());
+            let src: Vec<u8> = File::open(&file_path)
+                .unwrap()
+                .bytes()
+                .map(|r| r.unwrap())
+                .collect();
+            let mut comp = make_compressor(Box::new(std::io::Cursor::new(src.clone())));
+            let mut compressed: Vec<u8> = Vec::new();
+            comp.read_to_end(&mut compressed).unwrap();
+            println!(
+                "{} ==> {} {}%",
+                src.len(),
+                compressed.len(),
+                100.0 * (compressed.len() as f64 / src.len() as f64)
+            );
+            let mut output: Vec<u8> = Vec::new();
+            let mut decomp = make_decompressor(Box::new(std::io::Cursor::new(compressed)));
+            decomp.read_to_end(&mut output).unwrap();
+            assert!(src == output, "Compressor did not invert!");
+        }
+    }
 
     #[test]
     fn bwt_encode_decode() {
@@ -124,6 +163,10 @@ mod tests {
 
                 let result: Vec<u8> = Pipeline::from_reader(Box::new(Cursor::new(src.clone())))
                     .pipe(Box::new(BwtEncoder::new(block_size, bits_per_idx)))
+                    .pipe(Box::new(MtfEncoder::new()))
+                    .pipe(Box::new(AriEncoder::new_adaptive_bytes()))
+                    .pipe(Box::new(AriDecoder::new_adaptive_bytes()))
+                    .pipe(Box::new(MtfDecoder::new()))
                     .pipe(Box::new(BwtDecoder::new(block_size, bits_per_idx)))
                     .bytes()
                     .map(|r| r.unwrap())

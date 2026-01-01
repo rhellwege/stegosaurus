@@ -1,21 +1,30 @@
-use anyhow::Result;
-use std::io::{Read, Write};
+use std::{
+    cell::RefCell,
+    io::{BufReader, Read, Write},
+    rc::Rc,
+};
 
 use crate::compression::bitstream::BitStream;
 
 pub mod arith;
 pub mod bitstream;
 pub mod bwt;
+pub mod bzrle;
 pub mod lzss;
 pub mod mtf;
 pub mod rle;
 
-pub trait DataTransform: Read {
-    fn attach_reader(&mut self, src: Box<dyn Read>);
+// Provides a way to give away multiple references to a reader
+#[derive(Clone)]
+pub struct RcReader<T: Read>(pub Rc<RefCell<T>>);
+impl<T: Read> Read for RcReader<T> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.0.borrow_mut().read(buf)
+    }
 }
 
-pub trait BitStreamDataTransform: DataTransform {
-    fn output_bitstream(&mut self) -> &mut BitStream;
+pub trait DataTransform: Read {
+    fn attach_reader(&mut self, src: Box<dyn Read>);
 }
 
 pub struct IdentityTransform {
@@ -34,82 +43,69 @@ impl Read for IdentityTransform {
     }
 }
 
+pub trait BitStreamDataTransform: DataTransform {
+    fn bitstream(&mut self) -> &mut BitStream;
+}
+
 pub struct Pipeline {
-    transform: Option<Box<dyn DataTransform>>,
+    head: Option<Rc<RefCell<Box<dyn DataTransform>>>>,
+    tail: Option<Rc<RefCell<Box<dyn DataTransform>>>>,
 }
 
 impl Pipeline {
     pub fn new() -> Self {
-        Pipeline { transform: None }
+        Pipeline {
+            head: None,
+            tail: None,
+        }
     }
 
     pub fn from_reader(reader: Box<dyn Read>) -> Self {
+        let identity: Rc<RefCell<Box<dyn DataTransform>>> =
+            Rc::new(RefCell::new(Box::new(IdentityTransform { src: reader })));
         Pipeline {
-            transform: Some(Box::new(IdentityTransform { src: reader })),
+            head: Some(identity.clone()),
+            tail: Some(identity),
         }
     }
 
-    pub fn pipe(self, mut new_transform: Box<dyn DataTransform>) -> Self {
-        if let Some(prev_transform) = self.transform {
-            new_transform.attach_reader(prev_transform);
+    pub fn pipe(self, new_transform: Box<dyn DataTransform>) -> Self {
+        let new_tail = Rc::new(RefCell::new(new_transform));
+        // The new transform should read from the current tail of the pipeline.
+        if let Some(current_tail) = self.tail.as_ref() {
+            let reader = RcReader(current_tail.clone());
+            let buffered_reader = BufReader::new(reader);
+            new_tail
+                .borrow_mut()
+                .attach_reader(Box::new(buffered_reader));
         }
 
-        Self {
-            transform: Some(new_transform),
-        }
-    }
-
-    pub fn pipe_bitstream(
-        self,
-        mut new_transform: Box<dyn BitStreamDataTransform>,
-    ) -> BitStreamPipeline {
-        if let Some(prev_transform) = self.transform {
-            new_transform.attach_reader(prev_transform);
-        }
-
-        BitStreamPipeline {
-            transform: Some(new_transform),
+        Pipeline {
+            head: self.head, // Head of the pipeline remains the same
+            tail: Some(new_tail),
         }
     }
 }
 
 impl DataTransform for Pipeline {
     fn attach_reader(&mut self, src: Box<dyn Read>) {
-        self.transform = Some(Box::new(IdentityTransform { src }));
+        // Attaching a reader to a pipeline means attaching it to the head of the pipeline.
+        if let Some(h) = &self.head {
+            h.borrow_mut().attach_reader(src);
+        } else {
+            // If the pipeline is empty, create a new head.
+            let identity: Rc<RefCell<Box<dyn DataTransform>>> =
+                Rc::new(RefCell::new(Box::new(IdentityTransform { src: src })));
+            self.head = Some(identity.clone());
+            self.tail = Some(identity);
+        }
     }
 }
 
 impl Read for Pipeline {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        if let Some(ref mut transform) = self.transform {
-            transform.read(buf)
-        } else {
-            Ok(0)
-        }
-    }
-}
-
-/// pipeline with a tail that implements Bitstream data transform
-pub struct BitStreamPipeline {
-    transform: Option<Box<dyn BitStreamDataTransform>>,
-}
-
-impl BitStreamPipeline {
-    // pub fn new() -> Self {}
-}
-
-impl DataTransform for BitStreamPipeline {
-    fn attach_reader(&mut self, src: Box<dyn Read>) {
-        let mut bs = BitStream::new();
-        bs.attach_reader(src);
-        // self.transform = Some(Box::new();
-    }
-}
-
-impl Read for BitStreamPipeline {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        if let Some(ref mut transform) = self.transform {
-            transform.read(buf)
+        if let Some(transform) = &self.tail {
+            transform.borrow_mut().read(buf)
         } else {
             Ok(0)
         }

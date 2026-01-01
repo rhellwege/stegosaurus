@@ -4,7 +4,7 @@ use std::io::{Read, Write};
 
 use anyhow::{Context, Result, anyhow};
 
-const BUFF_SIZE: usize = 1024;
+const BUFF_SIZE: usize = 4096;
 
 pub struct BitStream {
     src: Option<Box<dyn Read>>,

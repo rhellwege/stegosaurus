@@ -1,4 +1,4 @@
-use crate::compression::{BitStreamDataTransform, DataTransform};
+use crate::compression::DataTransform;
 
 use super::bitstream::BitStream;
 use anyhow::{Context, Result, anyhow};
@@ -98,12 +98,6 @@ impl DataTransform for AriEncoder {
         let mut bs = BitStream::new();
         bs.attach_reader(src);
         self.src = Some(bs);
-    }
-}
-
-impl BitStreamDataTransform for AriEncoder {
-    fn output_bitstream(&mut self) -> &mut BitStream {
-        &mut self.output_bs
     }
 }
 
@@ -257,7 +251,7 @@ impl Read for AriEncoder {
                     buf[i] = byte_buf;
                 }
 
-                return Err(std::io::Error::other("failed to read for unknown reason"));
+                return Ok(buf.len());
             }
 
             let _ = self.write_bits_for_symbol(symbol_buf as u16);
@@ -286,9 +280,7 @@ impl DataTransform for AriDecoder {
         let bits = bs
             .read_n_bits_u64(CODE_BITS as u8, &mut self.value)
             .unwrap();
-        println!("{:#064b}", self.value);
         self.value <<= CODE_BITS - bits;
-        println!("{:#064b}", self.value);
         self.src = Some(bs);
     }
 }
